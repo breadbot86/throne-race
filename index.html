@@ -92,6 +92,7 @@
         <option value="pve">经典 · 我打 3 个 AI</option>
         <option value="hotseat">经典 · 4 人同屏热座</option>
         <option value="sync">同步 · 实时乱斗（我 + 3 AI）</option>
+        <option value="syncspec">同步 · 4 AI 实时互坑（观战）</option>
         <option value="spectate">观战 · 4 个 AI 互坑</option>
       </select>
       <div style="height:8px"></div>
@@ -162,6 +163,7 @@ let confetti = [], fx = [], toastMsg = null;
 let aiTimer = null;
 const SYNC_CD = 500;      // 同步模式：动作间隔（毫秒）
 const SYNC_APMAX = 3;     // 同步模式：操作点上限
+function isSyncMode(){ return mode==='sync' || mode==='syncspec'; }
 
 /* ================= 种子随机（可复现） ================= */
 let RNGSEED = 1;
@@ -306,7 +308,7 @@ function newGame(){
   layout();
   buildPanel(); renderPanel(); syncSelects();
   refreshHint();
-  if (mode!=='sync'){ autoPassIfNeeded(); scheduleAI(); }
+  if (!isSyncMode()){ autoPassIfNeeded(); scheduleAI(); }
 }
 
 /* ================= 行动执行 ================= */
@@ -318,7 +320,7 @@ function doMove(p, cell){
   passStreak = 0; turnCount++;
   jump ? sJump() : sMove();
   if (cell.x===THRONE.x && cell.y===THRONE.y){ endGame(p); return; }
-  if (mode==='sync'){ spendAP(p); renderPanel(); return; }
+  if (isSyncMode()){ spendAP(p); renderPanel(); return; }
   nextTurn();
 }
 function doWall(p, kind, x, y){
@@ -328,7 +330,7 @@ function doWall(p, kind, x, y){
   passStreak = 0; turnCount++;
   sWall();
   fx.push({type:'wallpop', kind, x, y, t0:performance.now()});
-  if (mode==='sync'){ spendAP(p); renderPanel(); return; }
+  if (isSyncMode()){ spendAP(p); renderPanel(); return; }
   nextTurn();
 }
 function nextTurn(){
@@ -378,7 +380,7 @@ function endGame(p){
   ov.classList.add('show');
   document.getElementById('btnAgain').onclick = ()=>newGame();
   document.getElementById('btnWatch').onclick = ()=>{ mode='spectate'; newGame(); };
-  if (mode==='spectate') setTimeout(()=>{ if(winner===p) newGame(); }, 5000);
+  if (mode==='spectate' || mode==='syncspec') setTimeout(()=>{ if(winner===p) newGame(); }, 5000);
 }
 function toast(t){ toastMsg={text:t, t0:performance.now()}; }
 
@@ -518,7 +520,8 @@ cv.addEventListener('click', e=>{
   ac();
   if (winner||busy) return;
   let p;
-  if (mode==='sync'){
+  if (isSyncMode()){
+    if (!players[0].human) return;         // 纯观战变体：无人类操作
     p = players[0];
     const now = performance.now();
     if (now - p.lastAct < SYNC_CD){ toast('太快了！动作间隔 0.5 秒'); sBad(); return; }
@@ -596,7 +599,7 @@ window.addEventListener('resize', layout);
 let lastFrame = performance.now();
 function draw(now){
   const dt = Math.min(.05,(now-lastFrame)/1000); lastFrame = now;
-  if (mode==='sync' && !winner){
+  if (isSyncMode() && !winner){
     for(const p of players) p.ap = Math.min(SYNC_APMAX, p.ap + dt);   // 每秒回1点
     syncAIDriver(now);
   }
@@ -628,7 +631,7 @@ function draw(now){
   ctx.fillText('👑', px(THRONE.x)+CELL/2, px(THRONE.y)+CELL/2+2);
 
   // 当前人类玩家合法移动提示
-  const cp = winner?null:(mode==='sync'?players[0]:cur());
+  const cp = winner?null:(isSyncMode() ? (players[0].human?players[0]:null) : cur());
   if (cp && cp.human && !busy){
     ctx.fillStyle='rgba(255,255,255,.10)';
     for(const c of legalMoves(cp)){
@@ -680,8 +683,8 @@ function draw(now){
       Y=px(p.tween.fy+(p.cell.y-p.tween.fy)*e)+CELL/2;
       if(t>=1) p.tween=null;
     }
-    const isCur = (mode!=='sync') && p===cp;
-    if (mode==='sync'){
+    const isCur = !isSyncMode() && p===cp;
+    if (isSyncMode()){
       if (!p.ai){
         const cd = Math.max(0, SYNC_CD-(now-p.lastAct))/SYNC_CD;
         if (cd>0){                       // 冷却进度环
@@ -709,7 +712,7 @@ function draw(now){
     ctx.restore();
     ctx.fillStyle='rgba(255,255,255,.35)';
     ctx.beginPath(); ctx.arc(X-CELL*0.09,Y-CELL*0.11,CELL*0.08,0,7); ctx.fill();
-    if (mode==='sync'){                     // 操作点气泡：3格，亮=可用
+    if (isSyncMode()){                     // 操作点气泡：3格，亮=可用
       for(let i=0;i<SYNC_APMAX;i++){
         const f = Math.max(0, Math.min(1, p.ap - i));
         ctx.fillStyle='rgba(255,255,255,'+(0.18+0.72*f).toFixed(2)+')';
@@ -813,11 +816,11 @@ function syncSelects(){
   document.getElementById('btnSpeed').textContent = fastAI? '⚡ 极速' : '⚡ 正常';
 }
 function refreshHint(){
-  document.getElementById('hint').innerHTML = mode==='sync'
+  document.getElementById('hint').innerHTML = isSyncMode()
     ? '<b>同步模式</b>：没有回合，所有人同时行动！<br>'+
       '每人 <b>3 个操作点</b>（上限3）：走一步 / 放一堵墙各耗 1 点。<br>'+
       '动作间隔 <b>0.5 秒</b>，每秒恢复 1 点。<br>'+
-      '先踏上中央 👑 王座者获胜——AI 也在抢，手速与规划并重！'
+      '先踏上中央 👑 王座者获胜'+(mode==='syncspec'?'。4 个 AI 实时互坑，坐等翻车瞬间':'——AI 也在抢，手速与规划并重！')
     : '<b>每回合二选一</b><br>'+
       '① 点击相邻格子 = 走一步（可跳过贴脸的棋子）<br>'+
       '② 点击格线缝隙 = 放一堵墙（占2格，永久，自己颜色）<br>'+

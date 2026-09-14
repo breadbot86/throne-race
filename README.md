@@ -25,7 +25,8 @@
 | 经典 · 我打 3 个 AI | 传统回合制，你（蓝方）走一步 AI 走一步 |
 | 经典 · 4 人同屏热座 | 传统回合制，4 人轮流操作 |
 | **同步 · 实时乱斗** | 取消回合！你和 3 个 AI 同时行动 |
-| 观战 | 4 个 AI 互坑，输赢自动开下一局 |
+| **同步 · 4 AI 实时互坑（观战）** | 同步规则的纯观战，赢后 5 秒自动开下一局 |
+| 观战 | 经典规则的 4 个 AI 互坑，自动续局 |
 
 **同步模式规则**：每人 3 个操作点（上限 3）——走一步 / 放一堵墙各消耗 1 点；动作间隔 0.5 秒；每秒自动恢复 1 点。棋子头顶的白色气泡就是当前操作点。
 
@@ -40,7 +41,7 @@ git clone https://github.com/breadbot86/throne-race.git
 open throne-race/index.html   # 或直接双击
 ```
 
-URL 参数（调试/复现用）：`?seed=123`（固定随机种子，跳过规则弹窗）、`?mode=sync`（pve/hotseat/spectate/sync）、`?size=15`、`?walls=20`、`?fast=1`。
+URL 参数（调试/复现用）：`?seed=123`（固定随机种子，跳过规则弹窗）、`?mode=syncspec`（pve/hotseat/sync/syncspec/spectate）、`?size=15`、`?walls=20`、`?fast=1`。
 
 ## 技术
 
