@@ -33,6 +33,7 @@
   .pname{ font-size:13px; font-weight:600; flex:1; white-space:nowrap;}
   .tagyou{ font-size:10px; color:#0a0f1a; background:#cfe0ff; border-radius:6px; padding:1px 5px; font-weight:700; margin-right:3px;}
   .wnum{ font-size:11px; font-weight:700; color:currentColor; white-space:nowrap;}
+  .itm{ font-size:13px; }
   .steps{ font-size:11px; color:var(--dim); flex:0 0 auto; text-align:right; white-space:nowrap;}
   button{
     background:#16203a; color:var(--text); border:1px solid #263252; border-radius:10px;
@@ -110,6 +111,14 @@
         <option value="16">每人 16 堵墙</option>
         <option value="20">每人 20 堵墙</option>
       </select>
+      <div style="height:8px"></div>
+      <select id="itemSel">
+        <option value="0" selected>道具：关闭</option>
+        <option value="3">道具：每 3 秒刷新</option>
+        <option value="5">道具：每 5 秒刷新</option>
+        <option value="7">道具：每 7 秒刷新</option>
+        <option value="10">道具：每 10 秒刷新</option>
+      </select>
       <div style="height:10px"></div>
       <div class="btnrow">
         <button class="primary" id="btnNew">开新一局</button>
@@ -159,6 +168,7 @@ let wallOwner = {};       // "h x,y" / "v x,y" -> color
 let players = [];
 let turnIdx = 0, winner = null, busy = false, turnCount = 0, passStreak = 0;
 let mode = 'pve', wallStock = 8, muted = false, fastAI = false;
+let itemsOn = false, itemInterval = 5, items = [], itemClock = 0;   // 道具系统
 let confetti = [], fx = [], toastMsg = null;
 let aiTimer = null;
 const SYNC_CD = 500;      // 同步模式：动作间隔（毫秒）
@@ -174,6 +184,7 @@ if (Q.get('mode')) mode = Q.get('mode');
 const qw = +Q.get('walls');
 if (Q.get('walls') && qw>=1) wallStock = Math.min(20, qw);
 if (Q.get('size')){ const n=+Q.get('size'); if([9,11,13,15].includes(n)) setBoardSize(n); }
+if (Q.get('item')){ const v=+Q.get('item'); if([3,5,7,10].includes(v)){ itemsOn=true; itemInterval=v; } }
 if (Q.get('fast') === '1') fastAI = true;
 srand(Q.get('seed') ? +Q.get('seed') : ((Date.now()*2654435761)>>>0));
 
@@ -195,6 +206,8 @@ const sMove=()=>beep(320,.07,'triangle',.09,-90);
 const sJump=()=>beep(420,.1,'triangle',.1,180);
 const sWall=()=>{ beep(130,.14,'square',.09,-50); beep(85,.2,'sine',.12,-30); };
 const sBad =()=>beep(150,.12,'sawtooth',.06,-70);
+const sSmash=()=>{ beep(200,.08,'square',.1,-120); beep(70,.25,'sine',.16,-30); };
+const sPick=()=>{ beep(660,.08,'sine',.1); setTimeout(()=>beep(990,.1,'sine',.1),70); };
 const sWin =()=>[523,659,784,1047].forEach((f,i)=>setTimeout(()=>beep(f,.22,'triangle',.15),i*130));
 
 /* ================= 规则核心 ================= */
@@ -299,11 +312,12 @@ function newGame(){
       walls:wallStock, left:false,
       ai:(mode==='spectate') || (mode!=='hotseat' && !human),
       human,
-      tween:null, ap:SYNC_APMAX, lastAct:0, nextThink:0, bank:false, burstLeft:0,
+      tween:null, ap:SYNC_APMAX, lastAct:0, nextThink:0, bank:false, burstLeft:0, item:null,
     };
   });
   turnIdx = Math.floor(rnd()*4);
   winner = null; busy = false; turnCount = 0; passStreak = 0;
+  items = []; itemClock = 0;
   confetti = []; fx = []; toastMsg = null;
   document.getElementById('overlay').classList.remove('show');
   layout();
@@ -320,7 +334,33 @@ function doMove(p, cell){
   p.cell = {x:cell.x, y:cell.y};
   passStreak = 0; turnCount++;
   jump ? sJump() : sMove();
+  pickupItemAt(p);                                 // 踩到道具直接拾取
   if (cell.x===THRONE.x && cell.y===THRONE.y){ endGame(p); return; }
+  if (isSyncMode()){ spendAP(p); renderPanel(); return; }
+  nextTurn();
+}
+function pickupItemAt(p){
+  const idx = items.findIndex(it=>it.x===p.cell.x && it.y===p.cell.y);
+  if (idx<0) return;
+  const it = items[idx];
+  if (it.kind==='hammer'){
+    if (p.item) return;                            // 已扛着锤子：留给别人
+    p.item = 'hammer'; sPick();
+    fx.push({type:'toast', text:COLORS[p.color].name+' 拾取 🔨：点击任意墙将其击碎', t0:performance.now()});
+  }else{
+    p.walls++; sPick();
+    fx.push({type:'itempop', x:it.x, y:it.y, t0:performance.now()});
+  }
+  items.splice(idx,1);
+  renderPanel();
+}
+function doSmash(p, kind, x, y){
+  (kind==='h'?wallsH:wallsV).delete(K(x,y));
+  delete wallOwner[kind+' '+K(x,y)];
+  p.item = null;
+  passStreak = 0; turnCount++;
+  sSmash();
+  fx.push({type:'smash', kind, x, y, t0:performance.now()});
   if (isSyncMode()){ spendAP(p); renderPanel(); return; }
   nextTurn();
 }
@@ -402,6 +442,10 @@ function aiTurn(){
   const opps = players.filter(q=>q!==p && !q.left);
   const minOppD = Math.min(...opps.map(q=>dists[q.color]));
 
+  if (p.item==='hammer'){
+    const sm = bestSmash(p);
+    if (sm){ aiAct(p,'smash',sm); return; }
+  }
   if (myD <= 1){
     const ms = legalMoves(p);
     if (ms.length){ aiAct(p, 'move', bestToward(p, ms)); return; }
@@ -454,6 +498,7 @@ function aiAct(p, kind, arg){
     busy = false;
     if (winner) return;
     if (kind==='move') doMove(p, arg);
+    else if (kind==='smash') doSmash(p, arg[0], arg[1], arg[2]);
     else doWall(p, arg[0], arg[1], arg[2]);
   }, fastAI ? 18 : 130 + rnd()*150);
 }
@@ -489,6 +534,10 @@ function syncAIDecide(p){
     const ms = legalMoves(p);
     if (ms.length){ doMove(p, bestToward(p, ms)); return true; }
   }
+  if (p.item==='hammer'){                       // 有锤子：砸对自己收益最大的墙
+    const sm = bestSmash(p);
+    if (sm){ doSmash(p, sm[0], sm[1], sm[2]); return true; }
+  }
   let bestWall=null, bestScore=1.6 + rnd()*0.8;
   if (p.walls>0){
     const spots = allWallSpots();
@@ -514,6 +563,37 @@ function syncAIDecide(p){
   if (ms.length){ doMove(p, bestToward(p,ms)); return true; }
   if (bestWall){ doWall(p, bestWall[0], bestWall[1], bestWall[2]); return true; }
   return false;
+}
+
+function spawnItem(){
+  if (items.length>=3) return;
+  const free=[];
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+    if (x===THRONE.x&&y===THRONE.y) continue;
+    if (pawnAt(x,y)) continue;
+    if (items.some(it=>it.x===x&&it.y===y)) continue;
+    free.push([x,y]);
+  }
+  if (!free.length) return;
+  const [x,y] = free[Math.floor(rnd()*free.length)];
+  items.push({x, y, kind: rnd()<0.5?'hammer':'wall'});
+  fx.push({type:'itempop', x, y, t0:performance.now()});
+  sPick();
+}
+function bestSmash(p){
+  let best=null, bestGain=0;
+  const myD = bfsFromThrone(wallsH,wallsV).dist[p.cell.y*N+p.cell.x];
+  const consider=[];
+  wallsH.forEach(function(k){ const[a,b]=k.split(',').map(Number); consider.push(['h',a,b]); });
+  wallsV.forEach(function(k){ const[a,b]=k.split(',').map(Number); consider.push(['v',a,b]); });
+  for(const [k,x,y] of consider){
+    const sH=new Set(wallsH), sV=new Set(wallsV);   // 双向拷贝：评估绝不能污染真实棋局
+    sH.delete(K(x,y)); sV.delete(K(x,y));
+    const d2 = bfsFromThrone(sH,sV).dist[p.cell.y*N+p.cell.x];
+    const gain = myD - d2;
+    if (gain>bestGain){ bestGain=gain; best=[k,x,y]; }
+  }
+  return best;
 }
 
 /* ================= 人类输入 ================= */
@@ -545,7 +625,12 @@ cv.addEventListener('click', e=>{
   const gx=e.clientX-r.left, gy=e.clientY-r.top;
   const cx=(gx-PAD)/CELL, cy=(gy-PAD)/CELL;
 
-  // ① 靠近格线 → 放墙
+  // ① 扛着锤子 → 点击墙砸碎
+  if (p.item==='hammer'){
+    const sm = wallAt(cx, cy);
+    if (sm){ doSmash(p, sm[0], sm[1], sm[2]); return; }
+  }
+  // ② 靠近格线 → 放墙
   const w = snapWall(cx, cy);
   if (w){
     const [k,x,y]=w;
@@ -584,6 +669,23 @@ function snapWall(cx, cy){
     return ['h', hx, hy];
   }
 }
+// 光标下的墙（锤子用）
+function wallAt(cx, cy){
+  let best=null, bd=0.3;
+  wallsH.forEach(function(k){
+    const[a,b]=k.split(',').map(Number);
+    const dx=cx-Math.min(Math.max(cx,a),a+2), dy=cy-b;
+    const d=Math.hypot(dx,dy);
+    if(d<bd){ bd=d; best=['h',a,b]; }
+  });
+  wallsV.forEach(function(k){
+    const[a,b]=k.split(',').map(Number);
+    const dy=cy-Math.min(Math.max(cy,b),b+2), dx=cx-a;
+    const d=Math.hypot(dx,dy);
+    if(d<bd){ bd=d; best=['v',a,b]; }
+  });
+  return best;
+}
 
 /* ================= 渲染 ================= */
 if (!CanvasRenderingContext2D.prototype.roundRect){
@@ -615,6 +717,10 @@ function draw(now){
     for(const p of players) p.ap = Math.min(SYNC_APMAX, p.ap + dt);   // 每秒回1点
     syncAIDriver(now);
   }
+  if (itemsOn && !winner){
+    itemClock += dt;
+    if (itemClock >= itemInterval){ itemClock = 0; spawnItem(); }
+  }
   ctx.clearRect(0,0,boardPx,boardPx);
 
   const g = ctx.createLinearGradient(0,0,boardPx,boardPx);
@@ -642,6 +748,21 @@ function draw(now){
   ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('👑', px(THRONE.x)+CELL/2, px(THRONE.y)+CELL/2+2);
 
+  // 道具
+  for(const it of items){
+    const ix=px(it.x)+CELL/2, iy=px(it.y)+CELL/2;
+    const pu=0.5+0.5*Math.sin(now/260);
+    ctx.save();
+    ctx.shadowColor='rgba(255,210,80,'+(0.3+0.3*pu).toFixed(2)+')'; ctx.shadowBlur=10+5*pu;
+    ctx.fillStyle='#1b2438';
+    rr(ix-CELL*0.3, iy-CELL*0.3, CELL*0.6, CELL*0.6, Math.max(4,CELL*0.16)); ctx.fill();
+    ctx.strokeStyle='#fdca00'; ctx.lineWidth=1.5; ctx.stroke();
+    ctx.restore();
+    ctx.font=Math.floor(CELL*0.38)+'px serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(it.kind==='hammer'?'🔨':'🧱', ix, iy+1);
+  }
+
   // 当前人类玩家合法移动提示
   const cp = winner?null:(isSyncMode() ? (players[0].human?players[0]:null) : cur());
   if (cp && cp.human && !busy){
@@ -668,20 +789,33 @@ function draw(now){
   }
   ctx.shadowBlur=0;
 
-  // 墙 hover 预览
+  // 墙 hover 预览（扛锤时改为高亮可砸的墙）
   if (cp && cp.human && !busy && hover){
     const cx=(hover.gx-PAD)/CELL, cy=(hover.gy-PAD)/CELL;
-    const w = snapWall(cx,cy);
-    if (w){
-      const [k,x,y]=w;
-      const ok = cp.walls>0 && wallOK(k,x,y);
-      ctx.save(); ctx.globalAlpha=.3;
-      ctx.strokeStyle = ok ? COLORS[cp.color].main : '#ff4d4d';
-      ctx.lineWidth=WT; ctx.lineCap='round';
-      ctx.beginPath();
-      if(k==='h'){ ctx.moveTo(px(x),px(y)); ctx.lineTo(px(x+2),px(y)); }
-      else{ ctx.moveTo(px(x),px(y)); ctx.lineTo(px(x),px(y+2)); }
-      ctx.stroke(); ctx.restore();
+    if (cp.item==='hammer'){
+      const sm = wallAt(cx,cy);
+      if (sm){
+        const [k,x,y]=sm;
+        ctx.save(); ctx.globalAlpha=.85;
+        ctx.strokeStyle='#ffffff'; ctx.lineWidth=WT+2; ctx.lineCap='round';
+        ctx.beginPath();
+        if(k==='h'){ ctx.moveTo(px(x),px(y)); ctx.lineTo(px(x+2),px(y)); }
+        else{ ctx.moveTo(px(x),px(y)); ctx.lineTo(px(x),px(y+2)); }
+        ctx.stroke(); ctx.restore();
+      }
+    }else{
+      const w = snapWall(cx,cy);
+      if (w){
+        const [k,x,y]=w;
+        const ok = cp.walls>0 && wallOK(k,x,y);
+        ctx.save(); ctx.globalAlpha=.3;
+        ctx.strokeStyle = ok ? COLORS[cp.color].main : '#ff4d4d';
+        ctx.lineWidth=WT; ctx.lineCap='round';
+        ctx.beginPath();
+        if(k==='h'){ ctx.moveTo(px(x),px(y)); ctx.lineTo(px(x+2),px(y)); }
+        else{ ctx.moveTo(px(x),px(y)); ctx.lineTo(px(x),px(y+2)); }
+        ctx.stroke(); ctx.restore();
+      }
     }
   }
 
@@ -748,6 +882,25 @@ function draw(now){
       if(f.kind==='h'){ ctx.moveTo(px(f.x),px(f.y)); ctx.lineTo(px(f.x+2),px(f.y)); }
       else{ ctx.moveTo(px(f.x),px(f.y)); ctx.lineTo(px(f.x),px(f.y+2)); }
       ctx.stroke(); ctx.restore();
+    }else if (f.type==='smash'){
+      const t=(now-f.t0)/350;
+      if (t<=1){
+        ctx.save(); ctx.globalAlpha=(1-t)*0.9;
+        ctx.strokeStyle='#ffffff'; ctx.lineWidth=WT+8*(1-t);
+        ctx.lineCap='round';
+        ctx.beginPath();
+        if(f.kind==='h'){ ctx.moveTo(px(f.x),px(f.y)); ctx.lineTo(px(f.x+2),px(f.y)); }
+        else{ ctx.moveTo(px(f.x),px(f.y)); ctx.lineTo(px(f.x),px(f.y+2)); }
+        ctx.stroke(); ctx.restore();
+      }
+    }else if (f.type==='itempop'){
+      const t=(now-f.t0)/400;
+      if (t<=1){
+        ctx.save(); ctx.globalAlpha=(1-t)*0.8;
+        ctx.strokeStyle='#fdca00'; ctx.lineWidth=2.5;
+        ctx.beginPath(); ctx.arc(px(f.x)+CELL/2, px(f.y)+CELL/2, CELL*(0.2+0.4*t), 0, 7); ctx.stroke();
+        ctx.restore();
+      }
     }
   }
   drawConfetti(dt);
@@ -806,6 +959,7 @@ function buildPanel(){
       <span class="pname" style="color:var(--text)">${COLORS[p.color].name}
         ${p.human&&(mode==='pve'||mode==='sync')?'<span class="tagyou">你</span>':''}
         ${p.ai?'<span style="font-size:10px;color:var(--dim)">AI</span>':''}</span>
+      <span class="itm"></span>
       <span class="wnum" title="剩余墙数">墙 ×${wallStock}</span>
       <span class="steps"></span>`;
     el.appendChild(row);
@@ -818,6 +972,8 @@ function renderPanel(){
     row.classList.toggle('active', !winner && p===cur());
     const wn=row.querySelector('.wnum');
     if (wn) wn.textContent='墙 ×'+p.walls;
+    const itm=row.querySelector('.itm');
+    if (itm) itm.textContent = p.item==='hammer'?'🔨':'';
     const steps=row.querySelector('.steps');
     if (winner===p) steps.textContent='👑 赢';
     else if (dists && dists[p.color]>=0) steps.textContent='距王座 '+dists[p.color];
@@ -828,17 +984,23 @@ function syncSelects(){
   document.getElementById('modeSel').value = mode;
   document.getElementById('sizeSel').value = String(N);
   document.getElementById('wallSel').value = String(wallStock);
+  document.getElementById('itemSel').value = String(itemsOn?itemInterval:0);
   document.getElementById('btnSpeed').textContent = fastAI? '⚡ 极速' : '⚡ 正常';
 }
 function refreshHint(){
+  const itemLine = itemsOn
+    ? '<b>道具开启</b>：地图上随机出现 🧱(拾取立刻 +1 堵墙) 和 🔨(拾取后点击任意墙将其击碎)。<br>'
+    : '';
   document.getElementById('hint').innerHTML = isSyncMode()
     ? '<b>同步模式</b>：没有回合，所有人同时行动！<br>'+
       '每人 <b>3 个操作点</b>（上限3）：走一步 / 放一堵墙各耗 1 点。<br>'+
       '动作间隔 <b>0.5 秒</b>，每秒恢复 1 点。<br>'+
+      itemLine+
       '先踏上中央 👑 王座者获胜'+(mode==='syncspec'?'。4 个 AI 实时互坑，会攒点蓄力、满点连发':'——AI 会攒点蓄力、满点连发，手速与规划并重！')
     : '<b>每回合二选一</b><br>'+
       '① 点击相邻格子 = 走一步（可跳过贴脸的棋子）<br>'+
       '② 点击格线缝隙 = 放一堵墙（占2格，永久，自己颜色）<br>'+
+      itemLine+
       '<b>获胜</b>：第一个踏上中央 👑 王座。<br>'+
       '墙不能穿过、不能重叠，也不许把任何人<b>彻底堵死</b>。';
 }
@@ -855,6 +1017,7 @@ function showRules(first){
       <b>第一个踏上中央王座 👑 的人获胜。</b><br>
       规则保护：不许放墙把任何玩家彻底堵死——谁都得起码留一条活路。<br>
       <b>同步模式</b>：取消回合，四人同时行动。每人 3 个操作点（上限3），走子/放墙各耗 1 点，动作间隔 0.5 秒，每秒恢复 1 点。<br>
+      <b>道具模式</b>（设置里开启）：每隔几秒随机出现道具——🧱 拾取立刻 +1 堵墙；🔨 拾取后点击任意墙将其击碎（同步模式耗 1 操作点，经典模式耗当回合计）。<br>
       没有队友，没有谈判。<b>4位玩家，1位赢家，0个朋友。</b>
     </div>
     <div class="legend">
@@ -876,6 +1039,10 @@ document.getElementById('btnSpeed').onclick = function(){
 document.getElementById('modeSel').onchange = function(){ mode=this.value; newGame(); };
 document.getElementById('sizeSel').onchange = function(){ setBoardSize(+this.value); newGame(); };
 document.getElementById('wallSel').onchange = function(){ wallStock=+this.value; newGame(); };
+document.getElementById('itemSel').onchange = function(){
+  const v=+this.value; itemsOn = v>0; itemInterval = v||5;
+  items = []; itemClock = 0; refreshHint();
+};
 
 /* ================= 启动 ================= */
 layout();
