@@ -32,10 +32,8 @@
   .dot{ width:14px; height:14px; border-radius:50%; flex:0 0 14px; box-shadow:0 0 8px 1px currentColor; background:currentColor;}
   .pname{ font-size:13px; font-weight:600; flex:1; white-space:nowrap;}
   .tagyou{ font-size:10px; color:#0a0f1a; background:#cfe0ff; border-radius:6px; padding:1px 5px; font-weight:700; margin-right:3px;}
-  .walls{ display:flex; gap:3px; flex-wrap:wrap; max-width:70px;}
-  .walls i{ width:8px; height:8px; border-radius:2.5px; background:#2a3550; }
-  .walls i.on{ background:currentColor; box-shadow:0 0 5px currentColor;}
-  .steps{ font-size:11px; color:var(--dim); width:50px; text-align:right; white-space:nowrap;}
+  .wnum{ font-size:11px; font-weight:700; color:currentColor; white-space:nowrap;}
+  .steps{ font-size:11px; color:var(--dim); flex:0 0 auto; text-align:right; white-space:nowrap;}
   button{
     background:#16203a; color:var(--text); border:1px solid #263252; border-radius:10px;
     padding:9px 10px; font-size:13px; cursor:pointer; font-family:inherit; transition:.15s;
@@ -96,10 +94,19 @@
         <option value="spectate">观战 · 4 个 AI 互坑</option>
       </select>
       <div style="height:8px"></div>
+      <select id="sizeSel">
+        <option value="9">地图 9×9 · 紧凑</option>
+        <option value="11" selected>地图 11×11 · 标准</option>
+        <option value="13">地图 13×13 · 大</option>
+        <option value="15">地图 15×15 · 超大</option>
+      </select>
+      <div style="height:8px"></div>
       <select id="wallSel">
         <option value="5">每人 5 堵墙</option>
         <option value="8" selected>每人 8 堵墙</option>
         <option value="12">每人 12 堵墙</option>
+        <option value="16">每人 16 堵墙</option>
+        <option value="20">每人 20 堵墙</option>
       </select>
       <div style="height:10px"></div>
       <div class="btnrow">
@@ -127,7 +134,7 @@
 <script>
 "use strict";
 /* ================= 常量 ================= */
-const N = 11;
+let N = 11;
 const THRONE = {x:5, y:5};
 const COLORS = {
   blue:  {main:'#0f9ceb', name:'蓝方', rgb:[15,156,235]},
@@ -136,6 +143,11 @@ const COLORS = {
   orange:{main:'#f5a307', name:'橙方', rgb:[245,163,7]},
 };
 const SPAWN = {blue:{x:5,y:0}, green:{x:0,y:5}, red:{x:10,y:5}, orange:{x:5,y:10}};
+function setBoardSize(n){          // 四家出生点到王座始终等距
+  N = n; const c = (N-1)/2;
+  THRONE.x = THRONE.y = c;
+  SPAWN.blue = {x:c,y:0}; SPAWN.green = {x:0,y:c}; SPAWN.red = {x:N-1,y:c}; SPAWN.orange = {x:c,y:N-1};
+}
 const DIRS = [[1,0],[-1,0],[0,1],[0,-1]];
 
 /* ================= 状态 ================= */
@@ -155,6 +167,7 @@ function rnd(){ RNGSEED = (RNGSEED*1103515245 + 12345) & 0x7fffffff; return RNGS
 const Q = new URLSearchParams(location.search);
 if (Q.get('mode')) mode = Q.get('mode');
 if (Q.get('walls')) wallStock = Math.max(1, Math.min(20, +Q.get('walls')||8));
+if (Q.get('size')){ const n=+Q.get('size'); if([9,11,13,15].includes(n)) setBoardSize(n); }
 if (Q.get('fast') === '1') fastAI = true;
 srand(Q.get('seed') ? +Q.get('seed') : ((Date.now()*2654435761)>>>0));
 
@@ -284,6 +297,7 @@ function newGame(){
   winner = null; busy = false; turnCount = 0; passStreak = 0;
   confetti = []; fx = []; toastMsg = null;
   document.getElementById('overlay').classList.remove('show');
+  layout();
   buildPanel(); renderPanel(); syncSelects();
   autoPassIfNeeded();
   scheduleAI();
@@ -365,7 +379,7 @@ function scheduleAI(){
   const p = cur();
   if (p.ai){
     clearTimeout(aiTimer);
-    aiTimer = setTimeout(()=>{ if(!winner && cur()===p && p.ai) aiTurn(); }, fastAI?20:240);
+    aiTimer = setTimeout(()=>{ if(!winner && cur()===p && p.ai) aiTurn(); }, fastAI?16:110);
   }
 }
 function aiTurn(){
@@ -429,7 +443,7 @@ function aiAct(p, kind, arg){
     if (winner) return;
     if (kind==='move') doMove(p, arg);
     else doWall(p, arg[0], arg[1], arg[2]);
-  }, fastAI ? 24 : 420 + rnd()*380);
+  }, fastAI ? 18 : 130 + rnd()*150);
 }
 
 /* ================= 人类输入 ================= */
@@ -506,7 +520,7 @@ function layout(){
   const narrow = window.innerWidth <= 820;
   const maxW = narrow ? window.innerWidth-36 : window.innerWidth-330;
   const maxH = window.innerHeight - 170;
-  boardPx = Math.max(300, Math.min(maxW, maxH, 620));
+  boardPx = Math.max(300, Math.min(maxW, maxH, N>=13?680:620));
   const dpr = window.devicePixelRatio||1;
   cv.width = Math.round(boardPx*dpr); cv.height = Math.round(boardPx*dpr);
   cv.style.width = boardPx+'px'; cv.style.height = boardPx+'px';
@@ -687,7 +701,7 @@ function buildPanel(){
       <span class="pname" style="color:var(--text)">${COLORS[p.color].name}
         ${p.human&&mode==='pve'?'<span class="tagyou">你</span>':''}
         ${p.ai?'<span style="font-size:10px;color:var(--dim)">AI</span>':''}</span>
-      <span class="walls" title="剩余墙数">${'<i></i>'.repeat(wallStock)}</span>
+      <span class="wnum" title="剩余墙数">墙 ×${wallStock}</span>
       <span class="steps"></span>`;
     el.appendChild(row);
   }
@@ -697,8 +711,8 @@ function renderPanel(){
   for(const p of players){
     const row=document.getElementById('prow-'+p.color); if(!row) continue;
     row.classList.toggle('active', !winner && p===cur());
-    const dots=row.querySelectorAll('.walls i');
-    dots.forEach((d,i)=>d.classList.toggle('on', i<p.walls));
+    const wn=row.querySelector('.wnum');
+    if (wn) wn.textContent='墙 ×'+p.walls;
     const steps=row.querySelector('.steps');
     if (winner===p) steps.textContent='👑 赢';
     else if (dists && dists[p.color]>=0) steps.textContent='距王座 '+dists[p.color];
@@ -707,6 +721,7 @@ function renderPanel(){
 }
 function syncSelects(){
   document.getElementById('modeSel').value = mode;
+  document.getElementById('sizeSel').value = String(N);
   document.getElementById('wallSel').value = String(wallStock);
   document.getElementById('btnSpeed').textContent = fastAI? '⚡ 极速' : '⚡ 正常';
 }
@@ -741,6 +756,7 @@ document.getElementById('btnSpeed').onclick = function(){
   fastAI=!fastAI; this.textContent = fastAI? '⚡ 极速':'⚡ 正常';
 };
 document.getElementById('modeSel').onchange = function(){ mode=this.value; newGame(); };
+document.getElementById('sizeSel').onchange = function(){ setBoardSize(+this.value); newGame(); };
 document.getElementById('wallSel').onchange = function(){ wallStock=+this.value; newGame(); };
 
 /* ================= 启动 ================= */

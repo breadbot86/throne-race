@@ -26,6 +26,8 @@
 | 热座 | 4 人共用一块屏轮流操作 |
 | 观战 | 4 个 AI 互坑，输赢自动开下一局 |
 
+侧栏还可调：**地图尺寸**（9×9 / 11×11 / 13×13 / 15×15，出生点到王座始终等距）、**每人墙数**（5~20）、AI 节奏（正常/极速）、音效。
+
 ## 本地运行
 
 无需安装任何东西：
@@ -35,7 +37,7 @@ git clone https://github.com/breadbot86/throne-race.git
 open throne-race/index.html   # 或直接双击
 ```
 
-URL 参数（调试/复现用）：`?seed=123`（固定随机种子，跳过规则弹窗）、`?mode=spectate`、`?fast=1`、`?walls=5`。
+URL 参数（调试/复现用）：`?seed=123`（固定随机种子，跳过规则弹窗）、`?mode=spectate`、`?size=15`、`?walls=20`、`?fast=1`。
 
 ## 技术
 
