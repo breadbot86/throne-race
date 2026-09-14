@@ -89,8 +89,9 @@
     <div class="card">
       <h3>模式</h3>
       <select id="modeSel">
-        <option value="pve">单人 · 我打 3 个 AI</option>
-        <option value="hotseat">热座 · 4 人同屏</option>
+        <option value="pve">经典 · 我打 3 个 AI</option>
+        <option value="hotseat">经典 · 4 人同屏热座</option>
+        <option value="sync">同步 · 实时乱斗（我 + 3 AI）</option>
         <option value="spectate">观战 · 4 个 AI 互坑</option>
       </select>
       <div style="height:8px"></div>
@@ -159,6 +160,8 @@ let turnIdx = 0, winner = null, busy = false, turnCount = 0, passStreak = 0;
 let mode = 'pve', wallStock = 8, muted = false, fastAI = false;
 let confetti = [], fx = [], toastMsg = null;
 let aiTimer = null;
+const SYNC_CD = 500;      // 同步模式：动作间隔（毫秒）
+const SYNC_APMAX = 3;     // 同步模式：操作点上限
 
 /* ================= 种子随机（可复现） ================= */
 let RNGSEED = 1;
@@ -286,24 +289,28 @@ function hasAnyAction(p){
 function newGame(){
   clearTimeout(aiTimer);
   wallsH.clear(); wallsV.clear(); wallOwner = {};
-  players = ['blue','green','red','orange'].map(c=>({
-    color:c, cell:{...SPAWN[c]},
-    walls:wallStock, left:false,
-    ai:(mode==='spectate')||(mode==='pve'&&c!=='blue'),
-    human:(mode==='hotseat')||(mode==='pve'&&c==='blue'),
-    tween:null,
-  }));
+  players = ['blue','green','red','orange'].map(c=>{
+    const human = (mode==='hotseat') || ((mode==='pve'||mode==='sync') && c==='blue');
+    return {
+      color:c, cell:{...SPAWN[c]},
+      walls:wallStock, left:false,
+      ai:(mode==='spectate') || (mode!=='hotseat' && !human),
+      human,
+      tween:null, ap:SYNC_APMAX, lastAct:0, nextThink:0,
+    };
+  });
   turnIdx = Math.floor(rnd()*4);
   winner = null; busy = false; turnCount = 0; passStreak = 0;
   confetti = []; fx = []; toastMsg = null;
   document.getElementById('overlay').classList.remove('show');
   layout();
   buildPanel(); renderPanel(); syncSelects();
-  autoPassIfNeeded();
-  scheduleAI();
+  refreshHint();
+  if (mode!=='sync'){ autoPassIfNeeded(); scheduleAI(); }
 }
 
 /* ================= 行动执行 ================= */
+function spendAP(p){ p.ap = Math.max(0, p.ap-1); p.lastAct = performance.now(); }
 function doMove(p, cell){
   const jump = Math.abs(p.cell.x-cell.x)+Math.abs(p.cell.y-cell.y) > 1;
   p.tween = {fx:p.cell.x, fy:p.cell.y, t0:performance.now()};
@@ -311,6 +318,7 @@ function doMove(p, cell){
   passStreak = 0; turnCount++;
   jump ? sJump() : sMove();
   if (cell.x===THRONE.x && cell.y===THRONE.y){ endGame(p); return; }
+  if (mode==='sync'){ spendAP(p); renderPanel(); return; }
   nextTurn();
 }
 function doWall(p, kind, x, y){
@@ -320,6 +328,7 @@ function doWall(p, kind, x, y){
   passStreak = 0; turnCount++;
   sWall();
   fx.push({type:'wallpop', kind, x, y, t0:performance.now()});
+  if (mode==='sync'){ spendAP(p); renderPanel(); return; }
   nextTurn();
 }
 function nextTurn(){
@@ -446,6 +455,53 @@ function aiAct(p, kind, arg){
   }, fastAI ? 18 : 130 + rnd()*150);
 }
 
+/* ---- 同步模式：实时驱动 ---- */
+function syncAIDriver(now){
+  if (winner) return;
+  for(const p of players){
+    if (!p.ai) continue;
+    if (now - p.lastAct < SYNC_CD) continue;
+    if (p.ap < 1) continue;
+    if (now < p.nextThink) continue;
+    p.nextThink = now + 60 + rnd()*180;
+    syncAIDecide(p);
+    if (winner) return;
+  }
+}
+function syncAIDecide(p){
+  const dists = allDists();
+  const myD = dists[p.color];
+  const opps = players.filter(q=>q!==p && !q.left);
+  if (myD <= 1){
+    const ms = legalMoves(p);
+    if (ms.length){ doMove(p, bestToward(p, ms)); return; }
+  }
+  let bestWall=null, bestScore=1.6 + rnd()*0.8;
+  if (p.walls>0){
+    const spots = allWallSpots();
+    for(let i=spots.length-1;i>0;i--){ const j=Math.floor(rnd()*(i+1)); [spots[i],spots[j]]=[spots[j],spots[i]]; }
+    let checked=0;
+    for(const [k,x,y] of spots){
+      if(++checked>140) break;
+      const sH=k==='h'?new Set(wallsH):wallsH, sV=k==='v'?new Set(wallsV):wallsV;
+      if(k==='h') sH.add(K(x,y)); else sV.add(K(x,y));
+      const d2 = allDists(sH,sV);
+      let hurt=0;
+      for(const q of opps){
+        const gain=d2[q.color]-dists[q.color];
+        if(gain>0) hurt += gain * (1 + Math.max(0,(6-dists[q.color]))*0.35);
+      }
+      const selfCost = myD - d2[p.color];
+      const score = hurt - selfCost*1.35 + rnd()*0.5;
+      if (score>bestScore){ bestScore=score; bestWall=[k,x,y]; }
+    }
+  }
+  if (bestWall && rnd()>0.10){ doWall(p, bestWall[0], bestWall[1], bestWall[2]); return; }
+  const ms=legalMoves(p);
+  if (ms.length) doMove(p, bestToward(p,ms));
+  else if (bestWall) doWall(p, bestWall[0], bestWall[1], bestWall[2]);
+}
+
 /* ================= 人类输入 ================= */
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
@@ -461,7 +517,15 @@ cv.addEventListener('mouseleave', ()=>hover=null);
 cv.addEventListener('click', e=>{
   ac();
   if (winner||busy) return;
-  const p = cur(); if (!p.human) return;
+  let p;
+  if (mode==='sync'){
+    p = players[0];
+    const now = performance.now();
+    if (now - p.lastAct < SYNC_CD){ toast('太快了！动作间隔 0.5 秒'); sBad(); return; }
+    if (p.ap < 1){ toast('操作点不足，等它恢复'); sBad(); return; }
+  }else{
+    p = cur(); if (!p.human) return;
+  }
   const r=cv.getBoundingClientRect();
   const gx=e.clientX-r.left, gy=e.clientY-r.top;
   const cx=(gx-PAD)/CELL, cy=(gy-PAD)/CELL;
@@ -532,6 +596,10 @@ window.addEventListener('resize', layout);
 let lastFrame = performance.now();
 function draw(now){
   const dt = Math.min(.05,(now-lastFrame)/1000); lastFrame = now;
+  if (mode==='sync' && !winner){
+    for(const p of players) p.ap = Math.min(SYNC_APMAX, p.ap + dt);   // 每秒回1点
+    syncAIDriver(now);
+  }
   ctx.clearRect(0,0,boardPx,boardPx);
 
   const g = ctx.createLinearGradient(0,0,boardPx,boardPx);
@@ -560,7 +628,7 @@ function draw(now){
   ctx.fillText('👑', px(THRONE.x)+CELL/2, px(THRONE.y)+CELL/2+2);
 
   // 当前人类玩家合法移动提示
-  const cp = winner?null:cur();
+  const cp = winner?null:(mode==='sync'?players[0]:cur());
   if (cp && cp.human && !busy){
     ctx.fillStyle='rgba(255,255,255,.10)';
     for(const c of legalMoves(cp)){
@@ -612,8 +680,20 @@ function draw(now){
       Y=px(p.tween.fy+(p.cell.y-p.tween.fy)*e)+CELL/2;
       if(t>=1) p.tween=null;
     }
-    const isCur = p===cp;
-    if (isCur){
+    const isCur = (mode!=='sync') && p===cp;
+    if (mode==='sync'){
+      if (!p.ai){
+        const cd = Math.max(0, SYNC_CD-(now-p.lastAct))/SYNC_CD;
+        if (cd>0){                       // 冷却进度环
+          ctx.strokeStyle='rgba(255,255,255,.30)'; ctx.lineWidth=2.5;
+          ctx.beginPath(); ctx.arc(X,Y,CELL*0.46,-Math.PI/2,-Math.PI/2+(1-cd)*Math.PI*2); ctx.stroke();
+        }else if (p.ap>=1){              // 可行动：呼吸环
+          ctx.strokeStyle='rgba(255,255,255,'+(0.45+0.3*Math.sin(now/220)).toFixed(2)+')';
+          ctx.lineWidth=2.5;
+          ctx.beginPath(); ctx.arc(X,Y,CELL*0.42+2.5+Math.sin(now/220)*1.2,0,7); ctx.stroke();
+        }
+      }
+    }else if (p===cp){
       ctx.strokeStyle='rgba(255,255,255,'+(0.5+0.35*Math.sin(now/220)).toFixed(2)+')';
       ctx.lineWidth=2.5;
       ctx.beginPath(); ctx.arc(X,Y,CELL*0.42+3+Math.sin(now/220)*1.5,0,7); ctx.stroke();
@@ -629,6 +709,13 @@ function draw(now){
     ctx.restore();
     ctx.fillStyle='rgba(255,255,255,.35)';
     ctx.beginPath(); ctx.arc(X-CELL*0.09,Y-CELL*0.11,CELL*0.08,0,7); ctx.fill();
+    if (mode==='sync'){                     // 操作点气泡：3格，亮=可用
+      for(let i=0;i<SYNC_APMAX;i++){
+        const f = Math.max(0, Math.min(1, p.ap - i));
+        ctx.fillStyle='rgba(255,255,255,'+(0.18+0.72*f).toFixed(2)+')';
+        ctx.beginPath(); ctx.arc(X-CELL*0.22+i*CELL*0.22, Y-CELL*0.55, CELL*0.055, 0, 7); ctx.fill();
+      }
+    }
   }
 
   // 特效
@@ -699,7 +786,7 @@ function buildPanel(){
     row.innerHTML=`
       <span class="dot"></span>
       <span class="pname" style="color:var(--text)">${COLORS[p.color].name}
-        ${p.human&&mode==='pve'?'<span class="tagyou">你</span>':''}
+        ${p.human&&(mode==='pve'||mode==='sync')?'<span class="tagyou">你</span>':''}
         ${p.ai?'<span style="font-size:10px;color:var(--dim)">AI</span>':''}</span>
       <span class="wnum" title="剩余墙数">墙 ×${wallStock}</span>
       <span class="steps"></span>`;
@@ -725,6 +812,18 @@ function syncSelects(){
   document.getElementById('wallSel').value = String(wallStock);
   document.getElementById('btnSpeed').textContent = fastAI? '⚡ 极速' : '⚡ 正常';
 }
+function refreshHint(){
+  document.getElementById('hint').innerHTML = mode==='sync'
+    ? '<b>同步模式</b>：没有回合，所有人同时行动！<br>'+
+      '每人 <b>3 个操作点</b>（上限3）：走一步 / 放一堵墙各耗 1 点。<br>'+
+      '动作间隔 <b>0.5 秒</b>，每秒恢复 1 点。<br>'+
+      '先踏上中央 👑 王座者获胜——AI 也在抢，手速与规划并重！'
+    : '<b>每回合二选一</b><br>'+
+      '① 点击相邻格子 = 走一步（可跳过贴脸的棋子）<br>'+
+      '② 点击格线缝隙 = 放一堵墙（占2格，永久，自己颜色）<br>'+
+      '<b>获胜</b>：第一个踏上中央 👑 王座。<br>'+
+      '墙不能穿过、不能重叠，也不许把任何人<b>彻底堵死</b>。';
+}
 
 /* ================= 按钮 ================= */
 function showRules(first){
@@ -737,6 +836,7 @@ function showRules(first){
       ② <b>放墙</b>：一堵墙占 2 格边，永久存在，用你的颜色。<br>
       <b>第一个踏上中央王座 👑 的人获胜。</b><br>
       规则保护：不许放墙把任何玩家彻底堵死——谁都得起码留一条活路。<br>
+      <b>同步模式</b>：取消回合，四人同时行动。每人 3 个操作点（上限3），走子/放墙各耗 1 点，动作间隔 0.5 秒，每秒恢复 1 点。<br>
       没有队友，没有谈判。<b>4位玩家，1位赢家，0个朋友。</b>
     </div>
     <div class="legend">
