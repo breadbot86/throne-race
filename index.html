@@ -339,7 +339,7 @@ function newGame(){
   turnIdx = Math.floor(rnd()*4);
   winner = null; busy = false; turnCount = 0; passStreak = 0;
   items = []; itemClock = 0;
-  confetti = []; fx = []; toastMsg = null;
+  confetti = []; fx = []; toastMsg = null; pendingWall = null;
   document.getElementById('overlay').classList.remove('show');
   layout();
   buildPanel(); renderPanel(); syncSelects();
@@ -645,6 +645,10 @@ function bestSmash(p){
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d', {alpha:false});   // 不透明画布：合成更快，杜绝拖影
 let CELL = 48, PAD = 16, boardPx = 0, hover = null;
+let touchMode = matchMedia('(pointer: coarse)').matches;  // 触屏设备：放墙需两次点击确认
+let pendingWall = null;                                   // 已预览待确认的墙位 ['h'|'v', x, y]
+let wallHintShown = false;
+window.addEventListener('touchstart', ()=>{ touchMode = true; }, { once:true, passive:true });
 
 function px(v){ return PAD + v*CELL; }
 
@@ -678,6 +682,18 @@ cv.addEventListener('click', e=>{
   const gx=e.clientX-r.left, gy=e.clientY-r.top;
   const intent = resolveIntent(p, (gx-PAD)/CELL, (gy-PAD)/CELL);
   if (!intent) return;
+  // 触屏：放墙需要两次点击——第一次出预览，再点同一位置才确认，点格子则取消预览
+  if (touchMode && intent.type === 'wall'){
+    if (pendingWall && pendingWall[0]===intent.kind && pendingWall[1]===intent.x && pendingWall[2]===intent.y){
+      pendingWall = null;                    // 第二次点击：确认放墙
+    }else{
+      pendingWall = [intent.kind, intent.x, intent.y];
+      if (!wallHintShown){ toast('已预览墙位：再点一次确认放墙，点格子取消'); wallHintShown = true; }
+      return;
+    }
+  }else if (intent.type !== 'wall'){
+    pendingWall = null;                      // 走子/砸墙：预览自动取消
+  }
   if (isOnline()){
     if (hostSim()) hostApplyAction(p, intent);          // 房主：本地校验后直接执行
     else {                                              // 客户端：发 intent，等房主快照
@@ -887,8 +903,33 @@ function draw(now){
   }
   ctx.shadowBlur=0;
 
+  // 触屏待确认墙位：高亮预览（方向 + 两格跨度 + 受影响格子淡光）
+  if (pendingWall && cp && cp.human && !busy){
+    const [k,x,y] = pendingWall;
+    const ok = cp.walls>0 && wallOK(k,x,y);
+    ctx.fillStyle = 'rgba(255,255,255,.05)';
+    const cells = k==='h' ? [[x,y-1],[x+1,y-1],[x,y],[x+1,y]] : [[x-1,y],[x,y-1],[x,y],[x,y+1]];
+    for(const [cxx,cyy] of cells) if (inB(cxx,cyy)){
+      rr(px(cxx)+1.5, px(cyy)+1.5, CELL-3, CELL-3, Math.max(4,CELL*0.14)); ctx.fill();
+    }
+    ctx.save();
+    ctx.globalAlpha = 0.6 + 0.4*Math.sin(now/200);
+    ctx.strokeStyle = ok ? COLORS[cp.color].main : '#ff4d4d';
+    ctx.lineWidth = WT+3; ctx.lineCap = 'round';
+    ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 12;
+    ctx.beginPath();
+    if(k==='h'){ ctx.moveTo(px(x),px(y)); ctx.lineTo(px(x+2),px(y)); }
+    else{ ctx.moveTo(px(x),px(y)); ctx.lineTo(px(x),px(y+2)); }
+    ctx.stroke(); ctx.restore();
+    ctx.font = '600 '+Math.max(11,Math.floor(CELL*0.24))+'px "PingFang SC",sans-serif';
+    ctx.fillStyle = ok ? '#dfe7f5' : '#ff8f8f';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    if(k==='h'){ ctx.fillText(ok?'再点一次确认':'这里放不了', px(x+1), y<=THRONE.y ? px(y)-CELL*0.55 : px(y)+CELL*0.55); }
+    else{ ctx.fillText(ok?'再点一次确认':'这里放不了', x<THRONE.x ? px(x)-CELL*0.75 : px(x)+CELL*0.75, px(y+1)); }
+  }
+
   // 墙 hover 预览（扛锤时改为高亮可砸的墙）
-  if (cp && cp.human && !busy && hover){
+  if (cp && cp.human && !busy && hover && !pendingWall){
     const cx=(hover.gx-PAD)/CELL, cy=(hover.gy-PAD)/CELL;
     if (cp.item==='hammer'){
       const sm = wallAt(cx,cy);
@@ -1089,18 +1130,19 @@ function refreshHint(){
   const itemLine = itemsOn
     ? '<b>道具开启</b>：地图上随机出现 🧱(拾取立刻 +1 堵墙) 和 🔨(拾取后点击任意墙将其击碎)。<br>'
     : '';
+  const touchLine = touchMode ? '📱 <b>触屏放墙</b>：点格线先出预览，再点一次确认；点格子直接走子。<br>' : '';
   document.getElementById('hint').innerHTML = isSyncMode()
     ? '<b>同步模式</b>：没有回合，所有人同时行动！<br>'+
       '每人 <b>3 个操作点</b>（上限3）：走一步 / 放一堵墙各耗 1 点。<br>'+
       '动作间隔 <b>0.5 秒</b>，每秒恢复 1 点。<br>'+
-      itemLine+
+      itemLine+touchLine+
       '先踏上中央 👑 王座者获胜'+(mode==='syncspec'?'。4 个 AI 实时互坑，会攒点蓄力、满点连发':'——AI 会攒点蓄力、满点连发，手速与规划并重！')
     : '<b>每回合二选一</b><br>'+
       '① 点击相邻格子 = 走一步（可跳过贴脸的棋子）<br>'+
       '② 点击格线缝隙 = 放一堵墙（占2格，永久，自己颜色）<br>'+
       itemLine+
       '<b>获胜</b>：第一个踏上中央 👑 王座。<br>'+
-      '墙不能穿过、不能重叠，也不许把任何人<b>彻底堵死</b>。';
+      '墙不能穿过、不能重叠，也不许把任何人<b>彻底堵死</b>。<br>'+touchLine;
 }
 
 /* ================= 在线对战（Cloudflare Workers + Durable Objects） ================= */
@@ -1144,6 +1186,7 @@ function applySnapshot(s, ev){
   mode = s.sync ? 'onsync' : 'online';
   netWatch = !!s.watch;
   busy = false;
+  pendingWall = null;   // 状态已刷新，待确认预览作废
   const prevCells = {};
   for (const p of players) prevCells[p.color] = { ...p.cell };
   if (s.N !== N) setBoardSize(s.N);
@@ -1238,7 +1281,7 @@ function newOnlineGame(seats, settings){
   turnIdx = Math.floor(rnd()*4);
   winner = null; busy = false; turnCount = 0; passStreak = 0;
   items = []; itemClock = 0;
-  confetti = []; fx = []; toastMsg = null;
+  confetti = []; fx = []; toastMsg = null; pendingWall = null;
   document.getElementById('overlay').classList.remove('show');
   layout(); syncSelects(); buildPanel(); renderPanel(); refreshHint();
   if (!isSyncMode()){ autoPassIfNeeded(); scheduleAI(); }   // 先手可能是 AI
