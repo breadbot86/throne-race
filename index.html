@@ -1104,8 +1104,9 @@ function refreshHint(){
 }
 
 /* ================= 在线对战（Cloudflare Workers + Durable Objects） ================= */
-const NET_WS_DEFAULT = 'wss://throne-race-online.breadbot86.workers.dev/api/room';
-                             // ↑ 已部署的在线对战服务器；绑定自定义域名后改成 wss://play.你的域名/api/room
+const NET_WS_DEFAULT = 'wss://throne-race-online.1kb.ren/api/room';
+                             // ↑ 在线对战服务器（部署在 1kb.ren 所在账号，Custom Domain 绑定，国内可直连）
+                             //   备用地址：wss://throne-race-online.breadbot86.workers.dev/api/room（大陆需代理）
                              //   临时调试可用 URL 参数覆盖：?ws=ws://127.0.0.1:8787/api/room
 
 const meOnline = () => players.find(p=>p.color===myColor);

@@ -3,41 +3,35 @@
 Cloudflare **Worker + Durable Object** 房间中继。架构是「房主权威」：
 
 - 每个房间一个 Durable Object，只负责座位分配、花名册、开局和消息转发，**不理解游戏规则**；
-- 游戏逻辑（走子/放墙校验、留路 BFS、AI 补位、道具）全部跑在**房主的浏览器**里；
+- 游戏逻辑（走子/放墙校验、留路 BFS、AI 补位、道具）全部运行在**房主的浏览器**里；
 - 其他玩家的操作经服务器转给房主校验执行，房主把状态快照广播给所有人。
+
+线上地址：**`https://throne-race-online.1kb.ren`**（部署在 1kb.ren 所在的 Cloudflare 账号，用官方 Custom Domain 绑定，国内可直连）。备用地址 `https://throne-race-online.breadbot86.workers.dev`（workers.dev 在大陆被墙，需代理；部署在另一个账号）。
 
 免费版 Workers 完全够用：每天 10 万次请求（WebSocket 收 100 条消息才计 1 次）、13,000 GB-s 时长，且发出的消息免费。一局棋只有几百条小消息。
 
 ## 部署（约 2 分钟）
 
+需要目标账号的凭证。两种方式任选：
+
+```bash
+# 方式 A：wrangler OAuth 登录（浏览器点一次授权）
+npx wrangler login
+
+# 方式 B：远程授权 / API Token
+#   CLOUDFLARE_API_TOKEN=<token> npx wrangler deploy
+```
+
 ```bash
 cd server
-npx wrangler login     # 浏览器弹出 Cloudflare 授权，用部署 Worker 的那个账号
 npx wrangler deploy
 ```
 
-部署成功会输出形如 `https://throne-race-online.<你的子域>.workers.dev` 的地址。
+`wrangler.toml` 里已固定 `account_id` 和 Custom Domain 路由（`throne-race-online.1kb.ren`），部署时 DNS 记录与证书由 Cloudflare 自动创建。
 
-然后在 `index.html` 里把地址填进顶部常量并发布到 GitHub Pages：
+> ⚠️ 经验教训：**跨账号把橙云 CNAME 指向 workers.dev 会被 Cloudflare 拒绝（error 1014，CNAME Cross-User Banned）**。域名在别的账号时，正确做法就是把 Worker 部署到域名所在账号再用 Custom Domain，而不是加解析指向 workers.dev。
 
-```js
-const NET_WS_DEFAULT = 'wss://throne-race-online.<你的子域>.workers.dev/api/room';
-```
-
-## 绑定自己的域名（域名在另一个 Cloudflare 账号时）
-
-Worker 所在账号无需任何操作。去**域名所在的账号**：
-
-1. 该域名 → **DNS → 添加记录**
-   - 类型：`CNAME`
-   - 名称：`play`（任意子域）
-   - 目标：`throne-race-online.<你的子域>.workers.dev`
-   - 代理状态：**已代理（橙色云）**
-2. 该域名 → **SSL/TLS → 概述 → 加密模式改为「完整 (Full)」**
-   （默认的「灵活」会用 HTTP 回源，WebSocket 会握手失败——这步不做联机连不上。）
-3. 把 `NET_WS_DEFAULT` 改成 `wss://play.你的域名.com/api/room`，重新发布。
-
-之后 `workers.dev` 原始地址和自定义域名都能用；国内建议走自定义域名（`workers.dev` 在大陆基本被污染）。
+前端地址在 `index.html` 顶部 `NET_WS_DEFAULT`，改完发布到 GitHub Pages 即生效。
 
 ## 本地联调 / 测试
 

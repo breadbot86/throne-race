@@ -1,6 +1,14 @@
 name = "throne-race-online"
 main = "src/worker.js"
 compatibility_date = "2025-08-01"
+account_id = "380148740bdd7ae5a7e0613f15c81053"
+
+# 部署在 1kb.ren 所在的 Cloudflare 账号，用官方 Custom Domain 绑定子域
+# （跨账号橙云 CNAME 指向 workers.dev 会被 CF 拒绝：error 1014）
+workers_dev = false
+routes = [
+  { pattern = "throne-race-online.1kb.ren", custom_domain = true }
+]
 
 # 免费版 Workers 只能用 SQLite 存储的 Durable Object，必须带这条迁移
 [[migrations]]
