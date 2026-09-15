@@ -1405,10 +1405,19 @@ function newOnlineGame(seats, settings){
 }
 function netStartRound(){
   const sel = document.getElementById('netSyncSel');
-  let sync, watch;
-  if (sel){ const v = sel.value; sync = v.includes('1'); watch = v.startsWith('w'); }
-  else { sync = isSyncMode(); watch = netWatch; }     // 对局中重开：沿用本局设置
-  netSend({ t:'start', settings:{ sync, watch, size:N, walls:wallStock, items: itemsOn?itemInterval:0 } });
+  const cSel = document.getElementById('netCountSel');
+  let sync, watch, count, size, walls, items;
+  if (sel){   // 大厅开局：读当前选择器
+    const v = sel.value; sync = v.includes('1'); watch = v.startsWith('w');
+    count = cSel ? +cSel.value : 4;
+    size = +document.getElementById('sizeSel').value;
+    walls = +document.getElementById('wallSel').value;
+    items = +document.getElementById('itemSel').value;
+  } else {    // 对局中重开：沿用本局设置
+    sync = isSyncMode(); watch = netWatch; count = players.length;
+    size = N; walls = wallStock; items = itemsOn ? itemInterval : 0;
+  }
+  netSend({ t:'start', settings:{ sync, watch, count, size, walls, items } });
 }
 
 /* ---- 连接与房间 UI ---- */
@@ -1482,6 +1491,7 @@ function netOnMsg(m){
     case 'welcome':
       net.phase='lobby'; net.code=m.code; net.seat=m.seat; net.isHost=!!m.isHost;
       myColor=m.seat; net.roster=m.players||[];
+      if (!isOnline()){ mode='online'; syncSelects(); }   // 邀请链接等入口：确保进入在线模式
       document.getElementById('overlay').classList.remove('show');
       renderNetCard(); lockNetSettings();
       return;
@@ -1669,7 +1679,7 @@ document.getElementById('modeSel').onchange = function(){
   mode=this.value; newGame();
 };
 document.getElementById('sizeSel').onchange = function(){
-  if (isOnline()){ if(!hostSim()) this.value=String(N); return; }   // 在线时仅房主在大厅可调
+  if (isOnline()){ if(!(net.isHost && net.phase==='lobby')) this.value=String(N); return; }   // 在线：房主在大厅可改，开局时应用
   setBoardSize(+this.value); newGame();
 };
 document.getElementById('countSel').onchange = function(){
@@ -1677,13 +1687,13 @@ document.getElementById('countSel').onchange = function(){
   playerCount = +this.value; newGame();
 };
 document.getElementById('wallSel').onchange = function(){
-  if (isOnline()){ if(!hostSim()) this.value=String(wallStock); return; }
+  if (isOnline()){ if(!(net.isHost && net.phase==='lobby')) this.value=String(wallStock); return; }
   wallStock=+this.value; newGame();
 };
 document.getElementById('itemSel').onchange = function(){
   const v=+this.value; itemsOn = v>0; itemInterval = v||5;
   items = []; itemClock = 0; refreshHint();
-  if (isOnline() && !hostSim()){ this.value = String(itemsOn?itemInterval:0); }
+  if (isOnline() && !(net.isHost && net.phase==='lobby')){ this.value = String(itemsOn?itemInterval:0); }
 };
 
 /* ================= 启动 ================= */
