@@ -106,8 +106,8 @@
         <option value="pve">经典 · 我 vs AI（人数可选）</option>
         <option value="hotseat">经典 · 同屏热座（人数可选）</option>
         <option value="sync">同步 · 实时乱斗（我 + AI）</option>
-        <option value="syncspec">同步 · 4 AI 实时互坑（观战）</option>
-        <option value="spectate">观战 · 4 个 AI 互坑</option>
+        <option value="syncspec">同步 · AI 实时互坑（观战，人数随选择）</option>
+        <option value="spectate">观战 · AI 互坑（人数随选择）</option>
         <option value="online">🌐 在线 · 好友联机</option>
       </select>
       <div style="height:8px"></div>
@@ -1249,7 +1249,7 @@ function refreshHint(){
       '每人 <b>3 个操作点</b>（上限3）：走一步 / 放一堵墙各耗 1 点。<br>'+
       '动作间隔 <b>0.5 秒</b>，每秒恢复 1 点。<br>'+
       itemLine+touchLine+
-      '先踏上中央 👑 王座者获胜'+(mode==='syncspec'?'。4 个 AI 实时互坑，会攒点蓄力、满点连发':'——AI 会攒点蓄力、满点连发，手速与规划并重！')
+      '先踏上中央 👑 王座者获胜'+(mode==='syncspec'?'。AI 实时互坑，会攒点蓄力、满点连发':'——AI 会攒点蓄力、满点连发，手速与规划并重！')
     : '<b>每回合二选一</b><br>'+
       '① 点击相邻格子 = 走一步（可跳过贴脸的棋子）<br>'+
       '② 点击格线缝隙 = 放一堵墙（占2格，永久，自己颜色）<br>'+
