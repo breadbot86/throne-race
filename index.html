@@ -504,25 +504,38 @@ function aiTurn(){
       const sH=k==='h'?new Set(wallsH):wallsH, sV=k==='v'?new Set(wallsV):wallsV;
       if(k==='h') sH.add(K(x,y)); else sV.add(K(x,y));
       const d2 = allDists(sH,sV);
-      let hurt=0;
+      let hurt=0, rawGain=0;
       for(const q of opps){
         const before=dists[q.color], after=d2[q.color];
         const gain=after-before;
-        if(gain>0) hurt += gain * (1 + Math.max(0,(6-before))*0.35);
+        if(gain>0){ rawGain+=gain; hurt += gain * (1 + Math.max(0,(6-before))*0.35); }
       }
       const selfCost = myD - d2[p.color];
-      const score = hurt - selfCost*1.35 + rnd()*0.5;
+      if (rawGain <= selfCost) continue;   // 拖对手的总量不超过自损：白坑自己，直接否决
+      const score = hurt - selfCost*2.2 + rnd()*0.5;
       if (score>bestScore){ bestScore=score; bestWall=[k,x,y]; }
     }
   }
   if (!bestWall && minOppD<=2 && p.walls>0){
+    // 紧急封堵：对手逼近王座，找一堵“拖住对手且不坑自己”的墙，评分选优
     const spots=allWallSpots().sort(()=>rnd()-0.5);
+    let bestGuard=null, bestGuardScore=0;
     for(const [k,x,y] of spots){
       const sH=k==='h'?new Set(wallsH):wallsH, sV=k==='v'?new Set(wallsV):wallsV;
       if(k==='h') sH.add(K(x,y)); else sV.add(K(x,y));
       const d2=allDists(sH,sV);
-      if (opps.some(q=>d2[q.color]>dists[q.color]) && d2[p.color]>=0){ bestWall=[k,x,y]; break; }
+      const selfCost = myD - d2[p.color];
+      if (selfCost > 1) continue;                    // 紧急时刻也最多容忍自损 1 步
+      let hurt=0;
+      for(const q of opps){
+        const g=d2[q.color]-dists[q.color];
+        if(g>0) hurt += g;
+      }
+      if (hurt <= selfCost) continue;                // 拖对手的量必须 strictly 大于自损
+      const s = hurt - selfCost*2;
+      if (s > bestGuardScore){ bestGuardScore=s; bestGuard=[k,x,y]; }
     }
+    if (bestGuard) bestWall=bestGuard;
   }
   if (bestWall && rnd()>0.06){ aiAct(p,'wall',bestWall); return; }
   const ms=legalMoves(p);
@@ -591,13 +604,14 @@ function syncAIDecide(p){
       const sH=k==='h'?new Set(wallsH):wallsH, sV=k==='v'?new Set(wallsV):wallsV;
       if(k==='h') sH.add(K(x,y)); else sV.add(K(x,y));
       const d2 = allDists(sH,sV);
-      let hurt=0;
+      let hurt=0, rawGain=0;
       for(const q of opps){
         const gain=d2[q.color]-dists[q.color];
-        if(gain>0) hurt += gain * (1 + Math.max(0,(6-dists[q.color]))*0.35);
+        if(gain>0){ rawGain+=gain; hurt += gain * (1 + Math.max(0,(6-dists[q.color]))*0.35); }
       }
       const selfCost = myD - d2[p.color];
-      const score = hurt - selfCost*1.35 + rnd()*0.5;
+      if (rawGain <= selfCost) continue;   // 拖对手的总量不超过自损：白坑自己，直接否决
+      const score = hurt - selfCost*2.2 + rnd()*0.5;
       if (score>bestScore){ bestScore=score; bestWall=[k,x,y]; }
     }
   }
