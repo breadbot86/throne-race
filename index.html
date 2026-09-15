@@ -1566,7 +1566,9 @@ function renderNetCard(){
   if (!isOnline() || net.phase==='idle' || net.phase==='connecting'){ el.style.display='none'; return; }
   el.style.display='';
   const prevCnt = document.getElementById('netCountSel');
+  const prevSync = document.getElementById('netSyncSel');
   const seatCount = Math.max(net.roster.length, prevCnt ? (+prevCnt.value || 4) : 4);
+  const syncVal = prevSync ? prevSync.value : '';   // 重绘时保留房主已选玩法
   const rows = COLOR_ORDER.slice(0, Math.min(seatCount, COLOR_ORDER.length)).map(c=>{
     const idx = net.roster.findIndex(r=>r.seat===c);
     if (idx<0) return `<div class="nrow" style="color:#5a6a8c"><span class="dot" style="color:${COLORS[c].main}"></span><span class="ndim">空位 · 开局后 AI 补位</span></div>`;
@@ -1585,10 +1587,10 @@ function renderNetCard(){
     : (net.isHost
       ? `<select id="netCountSel">${countOptionsHTML(seatCount)}</select>
          <select id="netSyncSel" style="margin-top:8px">
-           <option value="">经典 · 轮流行动（空位 AI 补位）</option>
-           <option value="1">同步 · 实时乱斗（空位 AI 补位）</option>
-           <option value="w">观战 · 经典规则 AI 互坑</option>
-           <option value="w1">观战 · 同步规则 AI 互坑</option>
+           <option value=""${syncVal===''?' selected':''}>经典 · 轮流行动（空位 AI 补位）</option>
+           <option value="1"${syncVal==='1'?' selected':''}>同步 · 实时乱斗（空位 AI 补位）</option>
+           <option value="w"${syncVal==='w'?' selected':''}>观战 · 经典规则 AI 互坑</option>
+           <option value="w1"${syncVal==='w1'?' selected':''}>观战 · 同步规则 AI 互坑</option>
          </select>
          <div class="ndim" style="margin:6px 0 2px">已加入的玩家始终有座位（座位自动扩到实际人数）。地图 / 墙数 / 道具用左侧设置，开局后锁定</div>
          <div class="btnrow" style="margin-top:6px">
