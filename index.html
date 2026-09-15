@@ -198,6 +198,10 @@ function spawnCells(count){
   for(let j=1;j<=d;j++) pts.push([c-j, c+d-j]);
   for(let j=1;j<d;j++)  pts.push([c-d+j, c-j]);
   const out = {};
+  if (count===4){   // 保留经典方位：蓝上、绿左、红右、橙下
+    out.blue={x:c,y:0}; out.green={x:0,y:c}; out.red={x:N-1,y:c}; out.orange={x:c,y:N-1};
+    return out;
+  }
   for(let i=0;i<count;i++){
     const [x,y] = pts[Math.round(i*per/count) % per];
     out[COLOR_ORDER[i]] = {x, y};
