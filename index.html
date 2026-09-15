@@ -192,6 +192,7 @@ function hostSim(){       // 在线模式下只有房主跑游戏逻辑（AI、�
 
 /* ---- 在线对战全局 ---- */
 let myColor = null;                       // 我坐的颜色（blue/green/red/orange）
+let netWatch = false;                     // 观战局：4 个座位全由 AI 打，全员围观
 let netPending = [], netFlushQueued = false;
 const net = { ws:null, phase:'idle', code:null, seat:null, isHost:false, roster:[], leaving:false, lastErr:null };
 
@@ -424,14 +425,18 @@ function endDraw(){
   netEv({type:'draw'});
   const ov=document.getElementById('overlay'), pn=document.getElementById('ovPanel');
   const btns = isOnline()
-    ? '<button class="primary" id="btnAgain">再来一局</button><button id="btnNetExit">离开房间</button>'
+    ? `<button class="primary" id="btnAgain">${netWatch?'立即下一局':'再来一局'}</button><button id="btnNetExit">离开房间</button>`
     : '<button class="primary" id="btnAgain">再来一局</button>';
   pn.innerHTML = `<h2>🤝 谁也到不了王座</h2>
     <div class="sub">互相筑墙的代价 —— 平局（0个朋友实锤）</div>
-    <div class="btnrow">${btns}</div>`;
+    <div class="btnrow">${btns}</div>
+    ${isOnline()&&netWatch?'<div class="ndim" style="margin-top:8px">观战模式 · 5 秒后自动开始下一局</div>':''}`;
   ov.classList.add('show');
   document.getElementById('btnAgain').onclick=()=> isOnline()? netStartRound() : newGame();
   const bx=document.getElementById('btnNetExit'); if (bx) bx.onclick=()=>netLeave();
+  if (isOnline() && netWatch && hostSim()){
+    setTimeout(()=>{ if (winner==='draw' && netWatch && net.phase==='playing') netStartRound(); }, 5000);
+  }
 }
 function endGame(p){
   winner = p; busy = true;
@@ -440,7 +445,7 @@ function endGame(p){
   renderPanel();
   const ov=document.getElementById('overlay'), pn=document.getElementById('ovPanel');
   const btns = isOnline()
-    ? '<button class="primary" id="btnAgain">再来一局</button><button id="btnNetExit">离开房间</button>'
+    ? `<button class="primary" id="btnAgain">${netWatch?'立即下一局':'再来一局'}</button><button id="btnNetExit">离开房间</button>`
     : '<button class="primary" id="btnAgain">再来一局</button><button id="btnWatch">看 AI 互坑</button>';
   pn.innerHTML = `
     <h2 style="color:${COLORS[p.color].main}; text-shadow:0 0 24px ${COLORS[p.color].main}66">
@@ -449,12 +454,17 @@ function endGame(p){
     <div class="legend">
       ${players.map(q=>`<span style="color:${COLORS[q.color].main}"><i></i>${q.name||COLORS[q.color].name}${q===p?' 👑':''}</span>`).join('')}
     </div>
-    <div class="btnrow">${btns}</div>`;
+    <div class="btnrow">${btns}</div>
+    ${isOnline()&&netWatch?'<div class="ndim" style="margin-top:8px">观战模式 · 5 秒后自动开始下一局</div>':''}`;
   ov.classList.add('show');
   document.getElementById('btnAgain').onclick = ()=> isOnline()? netStartRound() : newGame();
   const bw=document.getElementById('btnWatch'); if (bw) bw.onclick = ()=>{ mode='spectate'; newGame(); };
   const bx=document.getElementById('btnNetExit'); if (bx) bx.onclick = ()=>netLeave();
-  if (mode==='spectate' || mode==='syncspec') setTimeout(()=>{ if(winner===p) newGame(); }, 5000);
+  if (mode==='spectate' || mode==='syncspec'){
+    setTimeout(()=>{ if(winner===p) newGame(); }, 5000);
+  }else if (isOnline() && netWatch && hostSim()){
+    setTimeout(()=>{ if (winner===p && netWatch && net.phase==='playing') netStartRound(); }, 5000);
+  }
 }
 function toast(t){ toastMsg={text:t, t0:performance.now()}; }
 
@@ -1045,9 +1055,7 @@ function buildPanel(){
     row.innerHTML=`
       <span class="dot"></span>
       <span class="pname" style="color:var(--text)">${p.name || COLORS[p.color].name}
-        ${isOnline()
-          ? (p.color===myColor?'<span class="tagyou">你</span>':'')
-          : (p.human&&(mode==='pve'||mode==='sync')?'<span class="tagyou">你</span>':'')}
+        ${(isOnline() ? (!netWatch && p.color===myColor) : (p.human&&(mode==='pve'||mode==='sync')))?'<span class="tagyou">你</span>':''}
         ${p.ai?'<span style="font-size:10px;color:var(--dim)">AI</span>':''}</span>
       <span class="itm"></span>
       <span class="wnum" title="剩余墙数">墙 ×${wallStock}</span>
@@ -1118,7 +1126,7 @@ function netFlush(){
 }
 function serializeState(){
   return {
-    sync: isSyncMode(), N,
+    sync: isSyncMode(), watch: netWatch, N,
     wallsH: [...wallsH], wallsV: [...wallsV], wallOwner,
     turnIdx, turnCount, passStreak,
     winner: winner==null ? null : (winner==='draw' ? 'draw' : winner.color),
@@ -1133,6 +1141,7 @@ function serializeState(){
 }
 function applySnapshot(s, ev){
   mode = s.sync ? 'onsync' : 'online';
+  netWatch = !!s.watch;
   busy = false;
   const prevCells = {};
   for (const p of players) prevCells[p.color] = { ...p.cell };
@@ -1197,11 +1206,12 @@ function showOnlineEnd(w){
       ${players.map(q=>`<span style="color:${COLORS[q.color].main}"><i></i>${q.name||COLORS[q.color].name}${q.color===w?' 👑':''}</span>`).join('')}
     </div>
     <div class="btnrow">
-      ${hostSim() ? '<button class="primary" id="btnAgain">再来一局</button>' : '<button disabled>等待房主开新局…</button>'}
+      ${netWatch ? '' : (hostSim() ? '<button class="primary" id="btnAgain">再来一局</button>' : '<button disabled>等待房主开新局…</button>')}
       <button id="btnNetExit">离开房间</button>
-    </div>`;
+    </div>
+    ${netWatch?'<div class="ndim" style="margin-top:8px">观战模式 · 5 秒后自动开始下一局</div>':''}`;
   ov.classList.add('show');
-  document.getElementById('btnAgain').onclick = ()=>netStartRound();
+  const ba=document.getElementById('btnAgain'); if (ba) ba.onclick = ()=>netStartRound();
   document.getElementById('btnNetExit').onclick = ()=>netLeave();
 }
 
@@ -1209,13 +1219,14 @@ function showOnlineEnd(w){
 function newOnlineGame(seats, settings){
   clearTimeout(aiTimer);
   mode = settings.sync ? 'onsync' : 'online';
+  netWatch = !!settings.watch;
   setBoardSize(settings.size);
   wallStock = settings.walls;
   itemsOn = settings.items>0; itemInterval = settings.items||5;
   wallsH.clear(); wallsV.clear(); wallOwner = {};
   players = ['blue','green','red','orange'].map(c=>{
     const meta = (seats||[]).find(s=>s.seat===c);
-    const occupied = !!meta;
+    const occupied = !!meta && !settings.watch;      // 观战局：全员 AI，房主也只围观
     return {
       color:c, name: occupied ? meta.name : ('AI·'+COLORS[c].name),
       cell:{...SPAWN[c]}, walls:wallStock, left:false,
@@ -1234,8 +1245,10 @@ function newOnlineGame(seats, settings){
 }
 function netStartRound(){
   const sel = document.getElementById('netSyncSel');
-  const sync = sel ? sel.value==='1' : isSyncMode();
-  netSend({ t:'start', settings:{ sync, size:N, walls:wallStock, items: itemsOn?itemInterval:0 } });
+  let sync, watch;
+  if (sel){ const v = sel.value; sync = v.includes('1'); watch = v.startsWith('w'); }
+  else { sync = isSyncMode(); watch = netWatch; }     // 对局中重开：沿用本局设置
+  netSend({ t:'start', settings:{ sync, watch, size:N, walls:wallStock, items: itemsOn?itemInterval:0 } });
 }
 
 /* ---- 连接与房间 UI ---- */
@@ -1392,12 +1405,16 @@ function renderNetCard(){
         ${idx===0?'<span class="ndim">房主</span>':''}</span></div>`;
   }).join('');
   const mid = net.phase==='playing'
-    ? `<div class="ndim" style="text-align:center; margin:4px 0 8px">对局进行中${net.isHost?' · 顶部「开新一局」可开新回合':''}</div>
+    ? `<div class="ndim" style="text-align:center; margin:4px 0 8px">${netWatch
+        ? '观战进行中 · 结束后自动下一局'
+        : `对局进行中${net.isHost?' · 顶部「开新一局」可开新回合':''}`}</div>
        <div class="btnrow"><button id="btnNetLeave">离开房间</button></div>`
     : (net.isHost
       ? `<select id="netSyncSel">
-           <option value="">经典 · 轮流行动</option>
-           <option value="1">同步 · 实时乱斗</option>
+           <option value="">经典 · 轮流行动（空位 AI 补位）</option>
+           <option value="1">同步 · 实时乱斗（空位 AI 补位）</option>
+           <option value="w">观战 · 经典规则 AI 互坑</option>
+           <option value="w1">观战 · 同步规则 AI 互坑</option>
          </select>
          <div class="ndim" style="margin:6px 0 2px">地图 / 墙数 / 道具用左侧设置，开局后锁定</div>
          <div class="btnrow" style="margin-top:6px">

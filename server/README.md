@@ -56,7 +56,7 @@ open "http://localhost:8080/index.html?ws=ws://127.0.0.1:8787/api/room"
 | C→S | `{t:'hello', name}` | 连上后报名字，服务器分配座位（加入顺序 = 蓝绿红橙） |
 | S→C | `{t:'welcome', seat, isHost, code, players}` | 首位加入者为房主 |
 | S→C | `{t:'roster', players}` / `{t:'left', seat}` | 大厅与对局中的成员变动 |
-| C→S | `{t:'start', settings}` | 仅房主；`settings = {sync, size, walls, items}` |
+| C→S | `{t:'start', settings}` | 仅房主；`settings = {sync, watch, size, walls, items}`，`watch` 为观战局（全员 AI 围观） |
 | S→C | `{t:'start', settings, seats}` | 广播开局；未加入的座位由 AI 补位（跑在房主端） |
 | C→S | `{t:'act', a}` | 玩家操作意图（move/wall/smash），仅转给房主校验 |
 | H→S | `{t:'state', s, ev}` | 仅房主；权威状态快照 + 事件（音效/特效/提示），广播给其他人 |

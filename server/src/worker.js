@@ -104,6 +104,7 @@ export class Room {
         const s = m.settings ?? {};
         const settings = {
           sync: !!s.sync,
+          watch: !!s.watch,   // 观战局：4 个座位全由 AI 打，房间内全员围观
           size: [9, 11, 13, 15].includes(s.size) ? s.size : 11,
           walls: Math.min(30, Math.max(1, s.walls | 0 || 8)),
           items: [0, 3, 5, 7, 10].includes(s.items) ? s.items : 0,
