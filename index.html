@@ -29,6 +29,9 @@
   .card h3{ font-size:12px; color:var(--dim); letter-spacing:2px; margin-bottom:8px; font-weight:600;}
   .prow{ display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:10px; margin-bottom:6px; transition:.25s; border:1px solid transparent;}
   .prow.active{ background:rgba(255,255,255,.055); border-color:#263250;}
+  #plist.grid2{ display:grid; grid-template-columns:1fr 1fr; column-gap:8px; }
+  #plist.grid2 .prow{ margin-bottom:4px; padding:4px 6px; }
+  #plist.grid2 .pname{ font-size:11px; }
   .dot{ width:14px; height:14px; border-radius:50%; flex:0 0 14px; box-shadow:0 0 8px 1px currentColor; background:currentColor;}
   .pname{ font-size:13px; font-weight:600; flex:1; white-space:nowrap;}
   .tagyou{ font-size:10px; color:#0a0f1a; background:#cfe0ff; border-radius:6px; padding:1px 5px; font-weight:700; margin-right:3px;}
@@ -100,19 +103,25 @@
     <div class="card">
       <h3>模式</h3>
       <select id="modeSel">
-        <option value="pve">经典 · 我打 3 个 AI</option>
-        <option value="hotseat">经典 · 4 人同屏热座</option>
-        <option value="sync">同步 · 实时乱斗（我 + 3 AI）</option>
+        <option value="pve">经典 · 我 vs AI（人数可选）</option>
+        <option value="hotseat">经典 · 同屏热座（人数可选）</option>
+        <option value="sync">同步 · 实时乱斗（我 + AI）</option>
         <option value="syncspec">同步 · 4 AI 实时互坑（观战）</option>
         <option value="spectate">观战 · 4 个 AI 互坑</option>
         <option value="online">🌐 在线 · 好友联机</option>
       </select>
+      <div style="height:8px"></div>
+      <select id="countSel"></select>
       <div style="height:8px"></div>
       <select id="sizeSel">
         <option value="9">地图 9×9 · 紧凑</option>
         <option value="11" selected>地图 11×11 · 标准</option>
         <option value="13">地图 13×13 · 大</option>
         <option value="15">地图 15×15 · 超大</option>
+        <option value="17">地图 17×17 · 特大</option>
+        <option value="19">地图 19×19 · 巨型</option>
+        <option value="21">地图 21×21 · 究极</option>
+        <option value="100">地图 100×100 · 离谱试验场</option>
       </select>
       <div style="height:8px"></div>
       <select id="wallSel">
@@ -163,14 +172,62 @@ const COLORS = {
   green: {main:'#17d76c', name:'绿方', rgb:[23,215,108]},
   red:   {main:'#e02955', name:'红方', rgb:[224,41,85]},
   orange:{main:'#f5a307', name:'橙方', rgb:[245,163,7]},
+  purple:{main:'#a06bff', name:'紫方', rgb:[160,107,255]},
+  cyan:  {main:'#00c6c6', name:'青方', rgb:[0,198,198]},
+  pink:  {main:'#ff5fb0', name:'粉方', rgb:[255,95,176]},
+  white: {main:'#e8f0ff', name:'白方', rgb:[232,240,255]},
 };
-const SPAWN = {blue:{x:5,y:0}, green:{x:0,y:5}, red:{x:10,y:5}, orange:{x:5,y:10}};
-function setBoardSize(n){          // 四家出生点到王座始终等距
-  N = n; const c = (N-1)/2;
-  THRONE.x = THRONE.y = c;
-  SPAWN.blue = {x:c,y:0}; SPAWN.green = {x:0,y:c}; SPAWN.red = {x:N-1,y:c}; SPAWN.orange = {x:c,y:N-1};
+{ // 8 基础色不够 32 人：叠加生成双色——键名 blue-green，颜色为两基础色 RGB 平均（服务器用同一套键名）
+  const base = Object.keys(COLORS);
+  const pairs = [];
+  for (let i=0;i<base.length;i++) for (let j=i+1;j<base.length;j++) pairs.push([i,j]);
+  pairs.sort((a,b)=>(a[0]+a[1])-(b[0]+b[1]) || a[0]-b[0]);
+  for (const [i,j] of pairs.slice(0,24)){
+    const A=COLORS[base[i]], B=COLORS[base[j]];
+    const rgb=[0,1,2].map(t=>Math.round((A.rgb[t]+B.rgb[t])/2));
+    COLORS[base[i]+'-'+base[j]] = { main:`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`, name: A.name.slice(0,1)+B.name.slice(0,1), rgb };
+  }
+}
+const COLOR_ORDER = Object.keys(COLORS);   // 32 色（8 纯 + 24 混）
+let playerCount = 4;                       // 本局人数（2~32）
+// 环王座等距出生点：所有玩家到王座的步数距离完全相等（4 人时即四边中点布局）
+function spawnCells(count){
+  const c = THRONE.x, d = c, per = 4*d, pts = [];
+  for(let j=0;j<=d;j++) pts.push([c+j, c-d+j]);
+  for(let j=1;j<=d;j++) pts.push([c+d-j, c+j]);
+  for(let j=1;j<=d;j++) pts.push([c-j, c+d-j]);
+  for(let j=1;j<d;j++)  pts.push([c-d+j, c-j]);
+  const out = {};
+  for(let i=0;i<count;i++){
+    const [x,y] = pts[Math.round(i*per/count) % per];
+    out[COLOR_ORDER[i]] = {x, y};
+  }
+  return out;
+}
+function setBoardSize(n){
+  N = n;
+  THRONE.x = THRONE.y = Math.floor((N-1)/2);   // 100×100 等偶数边：王座取近似中心格
+  _bfsRebuild();
+}
+// BFS 用预分配 TypedArray + 索引队列：100×100 下每步 AI 要跑上百次 BFS，不能每次都现分配
+let _reach = new Uint8Array(N*N), _dist = new Int16Array(N*N), _q = new Int32Array(N*N);
+let _keys = new Array(N*N);
+function _bfsRebuild(){
+  _reach = new Uint8Array(N*N); _dist = new Int16Array(N*N); _q = new Int32Array(N*N);
+  _keys = new Array(N*N);
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++) _keys[y*N+x] = x+','+y;
 }
 const DIRS = [[1,0],[-1,0],[0,1],[0,-1]];
+{ // 人数选择器 2~32
+  const sel = document.getElementById('countSel');
+  const labels = {2:'2 人对战', 3:'3 人混战', 4:'4 人 · 经典'};
+  for(let i=2;i<=32;i++){
+    const o = document.createElement('option');
+    o.value = i; o.textContent = labels[i] || (i + ' 人大乱斗');
+    if (i===4) o.selected = true;
+    sel.appendChild(o);
+  }
+}
 
 /* ================= 状态 ================= */
 let wallsH = new Set();   // "x,y"：横墙，挡住 (x,y-1)/(x,y) 与 (x+1,y-1)/(x+1,y) 的竖向通行
@@ -192,7 +249,8 @@ function hostSim(){       // 在线模式下只有房主跑游戏逻辑（AI、�
 
 /* ---- 在线对战全局 ---- */
 let myColor = null;                       // 我坐的颜色（blue/green/red/orange）
-let netWatch = false;                     // 观战局：4 个座位全由 AI 打，全员围观
+let netWatch = false;                     // 观战局：座位全由 AI 打，全员围观
+let netCount = 4;                         // 本局座位数（≥已加入人数）
 let netPending = [], netFlushQueued = false;
 const net = { ws:null, phase:'idle', code:null, seat:null, isHost:false, roster:[], leaving:false, lastErr:null };
 
@@ -204,7 +262,7 @@ const Q = new URLSearchParams(location.search);
 if (Q.get('mode')) mode = Q.get('mode');
 const qw = +Q.get('walls');
 if (Q.get('walls') && qw>=1) wallStock = Math.min(20, qw);
-if (Q.get('size')){ const n=+Q.get('size'); if([9,11,13,15].includes(n)) setBoardSize(n); }
+if (Q.get('size')){ const n=+Q.get('size'); if([9,11,13,15,17,19,21,100].includes(n)) setBoardSize(n); }
 if (Q.get('item')){ const v=+Q.get('item'); if([3,5,7,10].includes(v)){ itemsOn=true; itemInterval=v; } }
 if (Q.get('fast') === '1') fastAI = true;
 srand(Q.get('seed') ? +Q.get('seed') : ((Date.now()*2654435761)>>>0));
@@ -246,20 +304,24 @@ function pawnAt(x,y){ return players.find(p=>!p.left && p.cell.x===x && p.cell.y
 function cur(){ return players[turnIdx]; }
 
 function bfsFromThrone(wH, wV){
-  const reach = new Uint8Array(N*N), dist = new Int16Array(N*N).fill(-1);
-  const q=[[THRONE.x,THRONE.y]]; const si=THRONE.y*N+THRONE.x;
+  const reach=_reach, dist=_dist, q=_q, keys=_keys;
+  reach.fill(0); dist.fill(-1);
+  const si=THRONE.y*N+THRONE.x;
   reach[si]=1; dist[si]=0;
-  for(let h=0;h<q.length;h++){
-    const [x,y]=q[h], d=dist[y*N+x];
+  let head=0, tail=0;
+  q[tail++]=si;
+  for(let h=0;h<tail;h++){
+    const i=q[h];
+    const x=i%N, y=(i-x)/N, d=dist[i];
     for(const[dx,dy]of DIRS){
       const nx=x+dx, ny=y+dy;
-      if(!inB(nx,ny)) continue;
-      if (dx===1)  { if (wV.has(K(nx,y))||wV.has(K(nx,y-1))) continue; }
-      else if(dx===-1){ if (wV.has(K(x,y))||wV.has(K(x,y-1))) continue; }
-      else if(dy===1) { if (wH.has(K(x,ny))||wH.has(K(x-1,ny))) continue; }
-      else            { if (wH.has(K(x,y))||wH.has(K(x-1,y))) continue; }
-      const i=ny*N+nx;
-      if(!reach[i]){ reach[i]=1; dist[i]=d+1; q.push([nx,ny]); }
+      if(nx<0||nx>=N||ny<0||ny>=N) continue;
+      const j=ny*N+nx;
+      if (dx===1)  { if (wV.has(keys[j])||wV.has(keys[j-N])) continue; }
+      else if(dx===-1){ if (wV.has(keys[i])||wV.has(keys[i-N])) continue; }
+      else if(dy===1) { if (wH.has(keys[j])||wH.has(keys[j-1])) continue; }
+      else            { if (wH.has(keys[i])||wH.has(keys[i-1])) continue; }
+      if(!reach[j]){ reach[j]=1; dist[j]=d+1; q[tail++]=j; }
     }
   }
   return {reach, dist};
@@ -311,32 +373,41 @@ function wallOK(kind,x,y){
   if(kind==='h') sH.add(K(x,y)); else sV.add(K(x,y));
   return everyoneHasPath(sH, sV);
 }
-function allWallSpots(){
+function wallCandidates(){   // 全部墙位（不查合法性）：大图下合法性用 BFS 检查很贵，交给调用方按预算懒查
   const out=[];
-  for(let y=1;y<N;y++) for(let x=0;x<N-1;x++) if(wallOK('h',x,y)) out.push(['h',x,y]);
-  for(let y=0;y<N-1;y++) for(let x=1;x<N;x++) if(wallOK('v',x,y)) out.push(['v',x,y]);
+  for(let y=1;y<N;y++) for(let x=0;x<N-1;x++) out.push(['h',x,y]);
+  for(let y=0;y<N-1;y++) for(let x=1;x<N;x++) out.push(['v',x,y]);
   return out;
 }
 function hasAnyAction(p){
   if (legalMoves(p).length) return true;
-  return p.walls>0 && allWallSpots().length>0;
+  if (p.walls<=0) return false;
+  const cands = wallCandidates();
+  let checked = 0;
+  for(const [k,x,y] of cands){
+    if (++checked > 3000) return false;      // 预算上限：只在棋盘几乎被墙填满时触达
+    if (wallClash(k,x,y)) continue;
+    if (wallOK(k,x,y)) return true;
+  }
+  return false;
 }
 
 /* ================= 开局 ================= */
 function newGame(){
   clearTimeout(aiTimer);
   wallsH.clear(); wallsV.clear(); wallOwner = {};
-  players = ['blue','green','red','orange'].map(c=>{
-    const human = (mode==='hotseat') || ((mode==='pve'||mode==='sync') && c==='blue');
+  const spawns = spawnCells(playerCount);
+  players = COLOR_ORDER.slice(0, playerCount).map((c, idx)=>{
+    const human = (mode==='hotseat') || ((mode==='pve'||mode==='sync') && idx===0);
     return {
-      color:c, cell:{...SPAWN[c]},
+      color:c, cell:{...spawns[c]},
       walls:wallStock, left:false,
       ai:(mode==='spectate') || (mode!=='hotseat' && !human),
       human,
       tween:null, ap:SYNC_APMAX, lastAct:0, nextThink:0, bank:false, burstLeft:0, item:null,
     };
   });
-  turnIdx = Math.floor(rnd()*4);
+  turnIdx = Math.floor(rnd()*players.length);
   winner = null; busy = false; turnCount = 0; passStreak = 0;
   items = []; itemClock = 0;
   confetti = []; fx = []; toastMsg = null; pendingWall = null;
@@ -379,6 +450,7 @@ function pickupItemAt(p){
   renderPanel();
 }
 function doSmash(p, kind, x, y){
+  wallsDirty = true;
   (kind==='h'?wallsH:wallsV).delete(K(x,y));
   delete wallOwner[kind+' '+K(x,y)];
   p.item = null;
@@ -390,6 +462,7 @@ function doSmash(p, kind, x, y){
   nextTurn();
 }
 function doWall(p, kind, x, y){
+  wallsDirty = true;
   (kind==='h'?wallsH:wallsV).add(K(x,y));
   wallOwner[kind+' '+K(x,y)] = p.color;
   p.walls--;
@@ -450,7 +523,7 @@ function endGame(p){
   pn.innerHTML = `
     <h2 style="color:${COLORS[p.color].main}; text-shadow:0 0 24px ${COLORS[p.color].main}66">
       👑 ${(p.name||COLORS[p.color].name)} 获胜！</h2>
-    <div class="sub">4位玩家 · 1位赢家 · 0个朋友 —— 共 ${turnCount} 手</div>
+    <div class="sub">${players.length}位玩家 · 1位赢家 · 0个朋友 —— 共 ${turnCount} 手</div>
     <div class="legend">
       ${players.map(q=>`<span style="color:${COLORS[q.color].main}"><i></i>${q.name||COLORS[q.color].name}${q===p?' 👑':''}</span>`).join('')}
     </div>
@@ -496,13 +569,16 @@ function aiTurn(){
   // 评估放墙
   let bestWall=null, bestScore=1.6 + rnd()*0.8;
   if (p.walls>0){
-    const spots = allWallSpots();
+    const spots = wallCandidates();
     for(let i=spots.length-1;i>0;i--){ const j=Math.floor(rnd()*(i+1)); [spots[i],spots[j]]=[spots[j],spots[i]]; }
-    let checked=0;
+    let checked=0, legal=0;
     for(const [k,x,y] of spots){
-      if(++checked>160) break;
+      if(++checked> (N>30?2000:4000) || legal>= (N>30?30:80)) break;   // 大图预算：随规模缩放
+      if (wallClash(k,x,y)) continue;
       const sH=k==='h'?new Set(wallsH):wallsH, sV=k==='v'?new Set(wallsV):wallsV;
       if(k==='h') sH.add(K(x,y)); else sV.add(K(x,y));
+      if (!everyoneHasPath(sH,sV)) continue;
+      legal++;
       const d2 = allDists(sH,sV);
       let hurt=0, rawGain=0;
       for(const q of opps){
@@ -518,11 +594,15 @@ function aiTurn(){
   }
   if (!bestWall && minOppD<=2 && p.walls>0){
     // 紧急封堵：对手逼近王座，找一堵“拖住对手且不坑自己”的墙，评分选优
-    const spots=allWallSpots().sort(()=>rnd()-0.5);
-    let bestGuard=null, bestGuardScore=0;
+    const spots=wallCandidates().sort(()=>rnd()-0.5);
+    let bestGuard=null, bestGuardScore=0, legal=0;
     for(const [k,x,y] of spots){
+      if (legal>= (N>30?60:120)) break;        // 大图预算
+      if (wallClash(k,x,y)) continue;
       const sH=k==='h'?new Set(wallsH):wallsH, sV=k==='v'?new Set(wallsV):wallsV;
       if(k==='h') sH.add(K(x,y)); else sV.add(K(x,y));
+      if (!everyoneHasPath(sH,sV)) continue;
+      legal++;
       const d2=allDists(sH,sV);
       const selfCost = myD - d2[p.color];
       if (selfCost > 1) continue;                    // 紧急时刻也最多容忍自损 1 步
@@ -596,13 +676,16 @@ function syncAIDecide(p){
   }
   let bestWall=null, bestScore=1.6 + rnd()*0.8;
   if (p.walls>0){
-    const spots = allWallSpots();
+    const spots = wallCandidates();
     for(let i=spots.length-1;i>0;i--){ const j=Math.floor(rnd()*(i+1)); [spots[i],spots[j]]=[spots[j],spots[i]]; }
-    let checked=0;
+    let checked=0, legal=0;
     for(const [k,x,y] of spots){
-      if(++checked>140) break;
+      if(++checked> (N>30?1500:3000) || legal>= (N>30?24:60)) break;   // 大图预算：随规模缩放
+      if (wallClash(k,x,y)) continue;
       const sH=k==='h'?new Set(wallsH):wallsH, sV=k==='v'?new Set(wallsV):wallsV;
       if(k==='h') sH.add(K(x,y)); else sV.add(K(x,y));
+      if (!everyoneHasPath(sH,sV)) continue;
+      legal++;
       const d2 = allDists(sH,sV);
       let hurt=0, rawGain=0;
       for(const q of opps){
@@ -658,6 +741,8 @@ function bestSmash(p){
 /* ================= 人类输入 ================= */
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d', {alpha:false});   // 不透明画布：合成更快，杜绝拖影
+const bgLayer = document.createElement('canvas'), wallLayer = document.createElement('canvas');
+let DPR = 1, bgDirty = true, wallsDirty = true;   // 图层缓存：棋盘底/墙只在变化时重绘（100×100 每帧 1 万格）
 let CELL = 48, PAD = 16, boardPx = 0, hover = null;
 let touchMode = matchMedia('(pointer: coarse)').matches;  // 触屏设备：放墙需两次点击确认
 let pendingWall = null;                                   // 已预览待确认的墙位 ['h'|'v', x, y]
@@ -821,15 +906,52 @@ if (!CanvasRenderingContext2D.prototype.roundRect){
 }
 function rr(x,y,w,h,r){ ctx.beginPath(); ctx.roundRect(x,y,w,h,r); }
 
+function renderBgLayer(){
+  bgLayer.width = cv.width; bgLayer.height = cv.height;
+  const g = bgLayer.getContext('2d');
+  g.setTransform(DPR,0,0,DPR,0,0);
+  const grad = g.createLinearGradient(0,0,boardPx,boardPx);
+  grad.addColorStop(0,'#0c1322'); grad.addColorStop(1,'#0a101d');
+  g.fillStyle=grad; g.fillRect(0,0,boardPx,boardPx);
+  g.fillStyle = '#141b2b';
+  for(let y=0;y<N;y++) for(let x=0;x<N;x++){
+    g.beginPath(); g.roundRect(px(x)+1.5, px(y)+1.5, CELL-3, CELL-3, Math.max(4,CELL*0.14)); g.fill();
+  }
+  g.fillStyle='rgba(120,150,210,.14)';
+  for(let y=0;y<=N;y++) for(let x=0;x<=N;x++){
+    g.beginPath(); g.arc(px(x),px(y),1.6,0,7); g.fill();
+  }
+}
+function renderWallLayer(){
+  wallLayer.width = cv.width; wallLayer.height = cv.height;
+  const g = wallLayer.getContext('2d');
+  g.setTransform(DPR,0,0,DPR,0,0);
+  const WT = Math.max(5, CELL*0.14);
+  g.lineCap='round'; g.lineWidth=WT;
+  for(const key of wallsH){
+    const[a,b]=key.split(',').map(Number);
+    const col = COLORS[wallOwner['h '+key]]?.main || '#7f8db0';
+    g.strokeStyle=col; g.shadowColor=col; g.shadowBlur=7;
+    g.beginPath(); g.moveTo(px(a),px(b)); g.lineTo(px(a+2),px(b)); g.stroke();
+  }
+  for(const key of wallsV){
+    const[a,b]=key.split(',').map(Number);
+    const col = COLORS[wallOwner['v '+key]]?.main || '#7f8db0';
+    g.strokeStyle=col; g.shadowColor=col; g.shadowBlur=7;
+    g.beginPath(); g.moveTo(px(a),px(b)); g.lineTo(px(a),px(b+2)); g.stroke();
+  }
+}
+
 function layout(){
   const narrow = window.innerWidth <= 820;
   const maxW = narrow ? window.innerWidth-36 : window.innerWidth-330;
   const maxH = window.innerHeight - 170;
-  boardPx = Math.max(300, Math.min(maxW, maxH, N>=13?680:620));
+  boardPx = Math.max(300, Math.min(maxW, maxH, N>=50?900:N>=21?820:N>=17?760:N>=13?680:620));
   const dpr = window.devicePixelRatio||1;
   cv.width = Math.round(boardPx*dpr); cv.height = Math.round(boardPx*dpr);
   cv.style.width = boardPx+'px'; cv.style.height = boardPx+'px';
   ctx.setTransform(dpr,0,0,dpr,0,0);
+  DPR = dpr; bgDirty = wallsDirty = true;
   CELL = (boardPx - PAD*2)/N;
 }
 window.addEventListener('resize', layout);
@@ -845,21 +967,9 @@ function draw(now){
     itemClock += dt;
     if (itemClock >= itemInterval){ itemClock = 0; spawnItem(); }
   }
-  ctx.clearRect(0,0,boardPx,boardPx);
-
-  const g = ctx.createLinearGradient(0,0,boardPx,boardPx);
-  g.addColorStop(0,'#0c1322'); g.addColorStop(1,'#0a101d');
-  ctx.fillStyle=g; ctx.fillRect(0,0,boardPx,boardPx);   // 满幅铺底（圆角交给 CSS 裁切）
-
-  for(let y=0;y<N;y++) for(let x=0;x<N;x++){
-    ctx.fillStyle = '#141b2b';
-    rr(px(x)+1.5, px(y)+1.5, CELL-3, CELL-3, Math.max(4,CELL*0.14));
-    ctx.fill();
-  }
-  ctx.fillStyle='rgba(120,150,210,.14)';
-  for(let y=0;y<=N;y++) for(let x=0;x<=N;x++){
-    ctx.beginPath(); ctx.arc(px(x),px(y),1.6,0,7); ctx.fill();
-  }
+  if (bgDirty){ renderBgLayer(); bgDirty = false; }
+  if (wallsDirty){ renderWallLayer(); wallsDirty = false; }
+  ctx.drawImage(bgLayer, 0, 0, boardPx, boardPx);
 
   // 王座
   const pulse = 0.5+0.5*Math.sin(now/500);
@@ -900,22 +1010,9 @@ function draw(now){
     }
   }
 
-  // 墙
+  // 墙（缓存图层）
   const WT = Math.max(5, CELL*0.14);
-  ctx.lineCap='round'; ctx.lineWidth=WT;
-  for(const key of wallsH){
-    const[a,b]=key.split(',').map(Number);
-    const col = COLORS[wallOwner['h '+key]]?.main || '#7f8db0';
-    ctx.strokeStyle=col; ctx.shadowColor=col; ctx.shadowBlur=7;
-    ctx.beginPath(); ctx.moveTo(px(a),px(b)); ctx.lineTo(px(a+2),px(b)); ctx.stroke();
-  }
-  for(const key of wallsV){
-    const[a,b]=key.split(',').map(Number);
-    const col = COLORS[wallOwner['v '+key]]?.main || '#7f8db0';
-    ctx.strokeStyle=col; ctx.shadowColor=col; ctx.shadowBlur=7;
-    ctx.beginPath(); ctx.moveTo(px(a),px(b)); ctx.lineTo(px(a),px(b+2)); ctx.stroke();
-  }
-  ctx.shadowBlur=0;
+  ctx.drawImage(wallLayer, 0, 0, boardPx, boardPx);
 
   // 触屏待确认墙位：高亮预览（方向 + 两格跨度 + 受影响格子淡光）
   if (pendingWall && cp && cp.human && !busy){
@@ -1103,6 +1200,7 @@ function drawConfetti(dt){
 /* ================= 侧栏 ================= */
 function buildPanel(){
   const el=document.getElementById('plist'); el.innerHTML='';
+  el.classList.toggle('grid2', players.length>8);
   for(const p of players){
     const row=document.createElement('div');
     row.className='prow'; row.id='prow-'+p.color;
@@ -1135,6 +1233,7 @@ function renderPanel(){
 }
 function syncSelects(){
   if (!isOnline()) document.getElementById('modeSel').value = mode;
+  document.getElementById('countSel').value = String(isOnline() ? Math.max(2, players.length) : playerCount);
   document.getElementById('sizeSel').value = String(N);
   document.getElementById('wallSel').value = String(wallStock);
   document.getElementById('itemSel').value = String(itemsOn?itemInterval:0);
@@ -1206,6 +1305,7 @@ function applySnapshot(s, ev){
   if (s.N !== N) setBoardSize(s.N);
   wallsH = new Set(s.wallsH);
   wallsV = new Set(s.wallsV);
+  wallsDirty = true;
   wallOwner = { ...s.wallOwner };
   turnIdx = s.turnIdx; turnCount = s.turnCount; passStreak = s.passStreak;
   items = (s.items||[]).map(it=>({x:it.x, y:it.y, kind:it.kind}));
@@ -1257,7 +1357,7 @@ function showOnlineEnd(w){
     : (()=>{
         const p = players.find(q=>q.color===w), c = COLORS[w].main;
         return `<h2 style="color:${c}; text-shadow:0 0 24px ${c}66">👑 ${(p&&p.name)||COLORS[w].name} 获胜！</h2>
-          <div class="sub">4位玩家 · 1位赢家 · 0个朋友 —— 共 ${turnCount} 手</div>`;
+          <div class="sub">${players.length}位玩家 · 1位赢家 · 0个朋友 —— 共 ${turnCount} 手</div>`;
       })();
   pn.innerHTML = `${head}
     <div class="legend">
@@ -1278,21 +1378,23 @@ function newOnlineGame(seats, settings){
   clearTimeout(aiTimer);
   mode = settings.sync ? 'onsync' : 'online';
   netWatch = !!settings.watch;
+  netCount = Math.max(2, settings.count || 4, (seats||[]).length);   // 已加入的真人必须都有座位
   setBoardSize(settings.size);
   wallStock = settings.walls;
   itemsOn = settings.items>0; itemInterval = settings.items||5;
   wallsH.clear(); wallsV.clear(); wallOwner = {};
-  players = ['blue','green','red','orange'].map(c=>{
+  const spawns = spawnCells(netCount);
+  players = COLOR_ORDER.slice(0, netCount).map(c=>{
     const meta = (seats||[]).find(s=>s.seat===c);
     const occupied = !!meta && !settings.watch;      // 观战局：全员 AI，房主也只围观
     return {
       color:c, name: occupied ? meta.name : ('AI·'+COLORS[c].name),
-      cell:{...SPAWN[c]}, walls:wallStock, left:false,
+      cell:{...spawns[c]}, walls:wallStock, left:false,
       ai: !occupied, human: occupied,
       tween:null, ap:SYNC_APMAX, lastAct:performance.now(), nextThink:0, bank:false, burstLeft:0, item:null,
     };
   });
-  turnIdx = Math.floor(rnd()*4);
+  turnIdx = Math.floor(rnd()*players.length);
   winner = null; busy = false; turnCount = 0; passStreak = 0;
   items = []; itemClock = 0;
   confetti = []; fx = []; toastMsg = null; pendingWall = null;
@@ -1444,7 +1546,8 @@ function netLeave(){
 }
 function lockNetSettings(){
   const hostLobby = isOnline() && net.isHost && net.phase==='lobby';
-  for (const id of ['sizeSel','wallSel','itemSel'])
+  for (const id of ['sizeSel','wallSel','itemSel']) document.getElementById(id).disabled = isOnline() ? !hostLobby : false;
+  for (const id of ['netCountSel']) if (document.getElementById(id))
     document.getElementById(id).disabled = isOnline() ? !hostLobby : false;
   document.getElementById('modeSel').disabled = isOnline();
 }
@@ -1452,7 +1555,9 @@ function renderNetCard(){
   const el = document.getElementById('netCard');
   if (!isOnline() || net.phase==='idle' || net.phase==='connecting'){ el.style.display='none'; return; }
   el.style.display='';
-  const rows = ['blue','green','red','orange'].map(c=>{
+  const prevCnt = document.getElementById('netCountSel');
+  const seatCount = Math.max(net.roster.length, prevCnt ? (+prevCnt.value || 4) : 4);
+  const rows = COLOR_ORDER.slice(0, Math.min(seatCount, COLOR_ORDER.length)).map(c=>{
     const idx = net.roster.findIndex(r=>r.seat===c);
     if (idx<0) return `<div class="nrow" style="color:#5a6a8c"><span class="dot" style="color:${COLORS[c].main}"></span><span class="ndim">空位 · 开局后 AI 补位</span></div>`;
     const meta = net.roster[idx];
@@ -1468,13 +1573,14 @@ function renderNetCard(){
         : `对局进行中${net.isHost?' · 顶部「开新一局」可开新回合':''}`}</div>
        <div class="btnrow"><button id="btnNetLeave">离开房间</button></div>`
     : (net.isHost
-      ? `<select id="netSyncSel">
+      ? `<select id="netCountSel">${countOptionsHTML(seatCount)}</select>
+         <select id="netSyncSel" style="margin-top:8px">
            <option value="">经典 · 轮流行动（空位 AI 补位）</option>
            <option value="1">同步 · 实时乱斗（空位 AI 补位）</option>
            <option value="w">观战 · 经典规则 AI 互坑</option>
            <option value="w1">观战 · 同步规则 AI 互坑</option>
          </select>
-         <div class="ndim" style="margin:6px 0 2px">地图 / 墙数 / 道具用左侧设置，开局后锁定</div>
+         <div class="ndim" style="margin:6px 0 2px">已加入的玩家始终有座位（座位自动扩到实际人数）。地图 / 墙数 / 道具用左侧设置，开局后锁定</div>
          <div class="btnrow" style="margin-top:6px">
            <button class="primary" id="btnNetStart">开始对局</button>
            <button id="btnNetLeave">离开</button>
@@ -1493,6 +1599,13 @@ function renderNetCard(){
   document.getElementById('btnCopyLink').onclick = ()=>copyText(location.origin+location.pathname+'?join='+net.code);
   document.getElementById('btnNetLeave').onclick = ()=>netLeave();
   const bs = document.getElementById('btnNetStart'); if (bs) bs.onclick = ()=>netStartRound();
+  const cs = document.getElementById('netCountSel'); if (cs) cs.onchange = ()=>renderNetCard();
+}
+function countOptionsHTML(selected){
+  const labels = {2:'2 人对战', 3:'3 人混战', 4:'4 人 · 经典'};
+  let h='';
+  for(let i=2;i<=32;i++) h += `<option value="${i}"${i===selected?' selected':''}>${labels[i]||(i+' 人大乱斗')}</option>`;
+  return h;
 }
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1517,7 +1630,7 @@ function showRules(first){
   pn.innerHTML = `
     <h2>玩法</h2>
     <div id="rules">
-      四名玩家从四边中点出发，<b>轮流行动</b>，每回合二选一：<br>
+      玩家们（2~32 人可选）从环王座等距的出生点出发，<b>轮流行动</b>，每回合二选一：<br>
       ① <b>移动</b>：棋子走一格（上下左右），不能穿墙、不能叠人；贴脸时可<b>跳</b>过去。<br>
       ② <b>放墙</b>：一堵墙占 2 格边，永久存在，用你的颜色。<br>
       <b>第一个踏上中央王座 👑 的人获胜。</b><br>
@@ -1527,8 +1640,8 @@ function showRules(first){
       没有队友，没有谈判。<b>4位玩家，1位赢家，0个朋友。</b>
     </div>
     <div class="legend">
-      <span style="color:#0f9ceb"><i></i>蓝</span><span style="color:#17d76c"><i></i>绿</span>
-      <span style="color:#e02955"><i></i>红</span><span style="color:#f5a307"><i></i>橙</span>
+      ${COLOR_ORDER.slice(0,8).map(c=>`<span style="color:${COLORS[c].main}"><i></i>${COLORS[c].name.replace('方','')}</span>`).join('')}
+      <span class="ndim">…更多颜色由双色叠加生成</span>
     </div>
     <button class="primary" id="btnOk">${first?'开打！':'继续'}</button>`;
   ov.classList.add('show');
@@ -1558,6 +1671,10 @@ document.getElementById('modeSel').onchange = function(){
 document.getElementById('sizeSel').onchange = function(){
   if (isOnline()){ if(!hostSim()) this.value=String(N); return; }   // 在线时仅房主在大厅可调
   setBoardSize(+this.value); newGame();
+};
+document.getElementById('countSel').onchange = function(){
+  if (isOnline()){ this.value = String(Math.max(2, players.length)); return; }
+  playerCount = +this.value; newGame();
 };
 document.getElementById('wallSel').onchange = function(){
   if (isOnline()){ if(!hostSim()) this.value=String(wallStock); return; }

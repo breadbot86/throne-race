@@ -5,9 +5,17 @@
  *            游戏逻辑全部运行在房主浏览器里（房主权威），服务器不理解游戏规则。
  */
 
-const SEATS = ['blue', 'green', 'red', 'orange'];
+const SEATS = (() => {   // 32 座位：8 基础色 + 24 双色混合（键名与前端 COLORS 生成规则一致）
+  const base = ['blue','green','red','orange','purple','cyan','pink','white'];
+  const pairs = [];
+  for (let i=0;i<base.length;i++) for (let j=i+1;j<base.length;j++) pairs.push([i,j]);
+  pairs.sort((a,b)=>(a[0]+a[1])-(b[0]+b[1]) || a[0]-b[0]);
+  const keys = base.slice();
+  for (const [i,j] of pairs.slice(0,24)) keys.push(base[i]+'-'+base[j]);
+  return keys;
+})();
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 去掉 0/O/1/I，防止看错
-const MAX_PLAYERS = 4;
+const MAX_PLAYERS = 32;
 
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), {
@@ -49,7 +57,7 @@ export class Room {
       return { ok: this.players.size === 0, msg: this.players.size ? '房间码冲突，请重试' : '' };
     }
     if (this.players.size === 0) return { ok: false, msg: '房间不存在，或已解散' };
-    if (this.players.size >= MAX_PLAYERS) return { ok: false, msg: '房间已满（4 人）' };
+    if (this.players.size >= MAX_PLAYERS) return { ok: false, msg: `房间已满（${MAX_PLAYERS} 人）` };
     return { ok: true };
   }
 
@@ -81,7 +89,7 @@ export class Room {
     if (m.t === 'hello') {
       if (this.players.has(ws)) return;
       if (this.players.size >= MAX_PLAYERS) {
-        this.send(ws, { t: 'err', msg: '房间已满（4 人）' });
+        this.send(ws, { t: 'err', msg: `房间已满（${MAX_PLAYERS} 人）` });
         return ws.close(4000, 'full');
       }
       let name = String(m.name ?? '').replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 12);
@@ -102,10 +110,13 @@ export class Room {
       case 'start': {
         if (ws !== this.host) return;
         const s = m.settings ?? {};
+        let count = Math.min(MAX_PLAYERS, Math.max(2, s.count | 0 || 4));
+        count = Math.max(count, this.players.size);   // 已加入的真人必须都有座位
         const settings = {
           sync: !!s.sync,
-          watch: !!s.watch,   // 观战局：4 个座位全由 AI 打，房间内全员围观
-          size: [9, 11, 13, 15].includes(s.size) ? s.size : 11,
+          watch: !!s.watch,   // 观战局：所有座位全由 AI 打，房间内全员围观
+          count,
+          size: [9, 11, 13, 15, 17, 19, 21, 100].includes(s.size) ? s.size : 11,
           walls: Math.min(30, Math.max(1, s.walls | 0 || 8)),
           items: [0, 3, 5, 7, 10].includes(s.items) ? s.items : 0,
         };
