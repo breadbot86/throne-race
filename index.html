@@ -189,6 +189,8 @@ const COLORS = {
   }
 }
 const COLOR_ORDER = Object.keys(COLORS);   // 32 色（8 纯 + 24 混）
+// 公安部《全国姓名报告》人口排行前 32 的姓氏，按座次分给每个小球
+const SURNAMES = ['王','李','张','刘','陈','杨','黄','赵','吴','周','徐','孙','马','朱','胡','郭','何','林','罗','高','郑','梁','谢','宋','唐','许','韩','冯','邓','曹','彭','曾'];
 let playerCount = 4;                       // 本局人数（2~32）
 // 环王座等距出生点：所有玩家到王座的步数距离完全相等（4 人时即四边中点布局）
 function spawnCells(count){
@@ -1074,7 +1076,8 @@ function draw(now){
   }
 
   // 棋子
-  for(const p of players){
+  for(let pi=0; pi<players.length; pi++){
+    const p = players[pi];
     let X=px(p.cell.x)+CELL/2, Y=px(p.cell.y)+CELL/2;
     if (p.tween){
       const t=Math.min(1,(now-p.tween.t0)/90);   // 干脆利落的滑动
@@ -1111,8 +1114,17 @@ function draw(now){
     ctx.fillStyle=rg;
     ctx.beginPath(); ctx.arc(X,Y,CELL*0.32,0,7); ctx.fill();
     ctx.restore();
-    ctx.fillStyle='rgba(255,255,255,.35)';
-    ctx.beginPath(); ctx.arc(X-CELL*0.09,Y-CELL*0.11,CELL*0.08,0,7); ctx.fill();
+    const surname = SURNAMES[pi];
+    if (surname && CELL >= 20){
+      const dark = (0.299*r + 0.587*g2 + 0.114*b) > 150;   // 白方等浅色球改用深色字
+      ctx.fillStyle = dark ? 'rgba(10,15,26,.92)' : 'rgba(255,255,255,.95)';
+      ctx.font = '600 ' + Math.max(9, Math.floor(CELL*0.34)) + 'px "PingFang SC","Microsoft YaHei",sans-serif';
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(surname, X, Y + CELL*0.02);
+    } else {
+      ctx.fillStyle='rgba(255,255,255,.35)';
+      ctx.beginPath(); ctx.arc(X-CELL*0.09,Y-CELL*0.11,CELL*0.08,0,7); ctx.fill();
+    }
     if (isSyncMode()){                     // 操作点气泡：3格，亮=可用；攒点中变金色
       for(let i=0;i<SYNC_APMAX;i++){
         const f = Math.max(0, Math.min(1, p.ap - i));
