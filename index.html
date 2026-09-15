@@ -48,6 +48,15 @@
     width:100%; background:#16203a; color:var(--text); border:1px solid #263252;
     border-radius:10px; padding:9px 8px; font-size:13px; font-family:inherit; outline:none;
   }
+  select:disabled, button:disabled{ opacity:.45; cursor:not-allowed; }
+  input{
+    width:100%; background:#16203a; color:var(--text); border:1px solid #263252;
+    border-radius:10px; padding:9px 10px; font-size:14px; font-family:inherit; outline:none;
+  }
+  input:focus, select:focus{ border-color:#3f6fd8; }
+  .netcode{ font-size:24px; text-align:center; letter-spacing:8px; font-weight:800; color:#fdca00; margin:2px 0 8px;}
+  .nrow{ display:flex; align-items:center; gap:8px; padding:3px 6px; font-size:13px;}
+  .ndim{ color:var(--dim); font-size:12px; line-height:1.6;}
   #hint{ font-size:12px; color:var(--dim); line-height:1.75;}
   #hint b{ color:var(--text);}
   #overlay{
@@ -87,6 +96,7 @@
       <h3>玩家</h3>
       <div id="plist"></div>
     </div>
+    <div class="card" id="netCard" style="display:none"></div>
     <div class="card">
       <h3>模式</h3>
       <select id="modeSel">
@@ -95,6 +105,7 @@
         <option value="sync">同步 · 实时乱斗（我 + 3 AI）</option>
         <option value="syncspec">同步 · 4 AI 实时互坑（观战）</option>
         <option value="spectate">观战 · 4 个 AI 互坑</option>
+        <option value="online">🌐 在线 · 好友联机</option>
       </select>
       <div style="height:8px"></div>
       <select id="sizeSel">
@@ -173,7 +184,16 @@ let confetti = [], fx = [], toastMsg = null;
 let aiTimer = null;
 const SYNC_CD = 500;      // 同步模式：动作间隔（毫秒）
 const SYNC_APMAX = 3;     // 同步模式：操作点上限
-function isSyncMode(){ return mode==='sync' || mode==='syncspec'; }
+function isSyncMode(){ return mode==='sync' || mode==='syncspec' || mode==='onsync'; }
+function isOnline(){ return mode==='online' || mode==='onsync'; }
+function hostSim(){       // 在线模式下只有房主跑游戏逻辑（AI、道具、规则判定）
+  return !isOnline() || (net.isHost && net.phase==='playing');
+}
+
+/* ---- 在线对战全局 ---- */
+let myColor = null;                       // 我坐的颜色（blue/green/red/orange）
+let netPending = [], netFlushQueued = false;
+const net = { ws:null, phase:'idle', code:null, seat:null, isHost:false, roster:[], leaving:false, lastErr:null };
 
 /* ================= 种子随机（可复现） ================= */
 let RNGSEED = 1;
@@ -333,6 +353,7 @@ function doMove(p, cell){
   p.tween = {fx:p.cell.x, fy:p.cell.y, t0:performance.now()};
   p.cell = {x:cell.x, y:cell.y};
   passStreak = 0; turnCount++;
+  netEv({type:'move', color:p.color, jump});
   jump ? sJump() : sMove();
   pickupItemAt(p);                                 // 踩到道具直接拾取
   if (cell.x===THRONE.x && cell.y===THRONE.y){ endGame(p); return; }
@@ -346,9 +367,11 @@ function pickupItemAt(p){
   if (it.kind==='hammer'){
     if (p.item) return;                            // 已扛着锤子：留给别人
     p.item = 'hammer'; sPick();
+    netEv({type:'pickup', color:p.color, kind:'hammer'});
     fx.push({type:'toast', text:COLORS[p.color].name+' 拾取 🔨：点击任意墙将其击碎', t0:performance.now()});
   }else{
     p.walls++; sPick();
+    netEv({type:'pickup', color:p.color, kind:'wall'});
     fx.push({type:'itempop', x:it.x, y:it.y, t0:performance.now()});
   }
   items.splice(idx,1);
@@ -360,6 +383,7 @@ function doSmash(p, kind, x, y){
   p.item = null;
   passStreak = 0; turnCount++;
   sSmash();
+  netEv({type:'smash', color:p.color, kind, x, y});
   fx.push({type:'smash', kind, x, y, t0:performance.now()});
   if (isSyncMode()){ spendAP(p); renderPanel(); return; }
   nextTurn();
@@ -370,6 +394,7 @@ function doWall(p, kind, x, y){
   p.walls--;
   passStreak = 0; turnCount++;
   sWall();
+  netEv({type:'wall', color:p.color, kind, x, y});
   fx.push({type:'wallpop', kind, x, y, t0:performance.now()});
   if (isSyncMode()){ spendAP(p); renderPanel(); return; }
   nextTurn();
@@ -386,6 +411,7 @@ function autoPassIfNeeded(){
   const p = cur();
   if (!hasAnyAction(p)){
     toast(COLORS[p.color].name+' 无路可走，跳过');
+    netEv({type:'pass', color:p.color});
     passStreak++;
     if (passStreak >= players.length*2){ endDraw(); return; }
     turnIdx = (turnIdx+1)%players.length;
@@ -395,32 +421,39 @@ function autoPassIfNeeded(){
 }
 function endDraw(){
   winner = 'draw'; busy = true;
+  netEv({type:'draw'});
   const ov=document.getElementById('overlay'), pn=document.getElementById('ovPanel');
+  const btns = isOnline()
+    ? '<button class="primary" id="btnAgain">再来一局</button><button id="btnNetExit">离开房间</button>'
+    : '<button class="primary" id="btnAgain">再来一局</button>';
   pn.innerHTML = `<h2>🤝 谁也到不了王座</h2>
     <div class="sub">互相筑墙的代价 —— 平局（0个朋友实锤）</div>
-    <div class="btnrow"><button class="primary" id="btnAgain">再来一局</button></div>`;
+    <div class="btnrow">${btns}</div>`;
   ov.classList.add('show');
-  document.getElementById('btnAgain').onclick=()=>newGame();
+  document.getElementById('btnAgain').onclick=()=> isOnline()? netStartRound() : newGame();
+  const bx=document.getElementById('btnNetExit'); if (bx) bx.onclick=()=>netLeave();
 }
 function endGame(p){
   winner = p; busy = true;
+  netEv({type:'win', color:p.color});
   sWin(); spawnConfetti();
   renderPanel();
   const ov=document.getElementById('overlay'), pn=document.getElementById('ovPanel');
+  const btns = isOnline()
+    ? '<button class="primary" id="btnAgain">再来一局</button><button id="btnNetExit">离开房间</button>'
+    : '<button class="primary" id="btnAgain">再来一局</button><button id="btnWatch">看 AI 互坑</button>';
   pn.innerHTML = `
     <h2 style="color:${COLORS[p.color].main}; text-shadow:0 0 24px ${COLORS[p.color].main}66">
-      👑 ${COLORS[p.color].name} 获胜！</h2>
+      👑 ${(p.name||COLORS[p.color].name)} 获胜！</h2>
     <div class="sub">4位玩家 · 1位赢家 · 0个朋友 —— 共 ${turnCount} 手</div>
     <div class="legend">
-      ${players.map(q=>`<span style="color:${COLORS[q.color].main}"><i></i>${COLORS[q.color].name}${q===p?' 👑':''}</span>`).join('')}
+      ${players.map(q=>`<span style="color:${COLORS[q.color].main}"><i></i>${q.name||COLORS[q.color].name}${q===p?' 👑':''}</span>`).join('')}
     </div>
-    <div class="btnrow">
-      <button class="primary" id="btnAgain">再来一局</button>
-      <button id="btnWatch">看 AI 互坑</button>
-    </div>`;
+    <div class="btnrow">${btns}</div>`;
   ov.classList.add('show');
-  document.getElementById('btnAgain').onclick = ()=>newGame();
-  document.getElementById('btnWatch').onclick = ()=>{ mode='spectate'; newGame(); };
+  document.getElementById('btnAgain').onclick = ()=> isOnline()? netStartRound() : newGame();
+  const bw=document.getElementById('btnWatch'); if (bw) bw.onclick = ()=>{ mode='spectate'; newGame(); };
+  const bx=document.getElementById('btnNetExit'); if (bx) bx.onclick = ()=>netLeave();
   if (mode==='spectate' || mode==='syncspec') setTimeout(()=>{ if(winner===p) newGame(); }, 5000);
 }
 function toast(t){ toastMsg={text:t, t0:performance.now()}; }
@@ -576,7 +609,9 @@ function spawnItem(){
   }
   if (!free.length) return;
   const [x,y] = free[Math.floor(rnd()*free.length)];
-  items.push({x, y, kind: rnd()<0.5?'hammer':'wall'});
+  const kind = rnd()<0.5?'hammer':'wall';
+  items.push({x, y, kind});
+  netEv({type:'itemspawn', x, y, kind});
   fx.push({type:'itempop', x, y, t0:performance.now()});
   sPick();
 }
@@ -612,7 +647,15 @@ cv.addEventListener('click', e=>{
   ac();
   if (winner||busy) return;
   let p;
-  if (isSyncMode()){
+  if (isOnline()){
+    p = players.find(q=>q.color===myColor);
+    if (!p || p.left || p.ai) return;
+    if (isSyncMode()){
+      const now = performance.now();
+      if (now - p.lastAct < SYNC_CD){ toast('太快了！动作间隔 0.5 秒'); sBad(); return; }
+      if (p.ap < 1){ toast('操作点不足，等它恢复'); sBad(); return; }
+    }else if (cur()!==p){ toast('还没轮到你'); sBad(); return; }
+  }else if (isSyncMode()){
     if (!players[0].human) return;         // 纯观战变体：无人类操作
     p = players[0];
     const now = performance.now();
@@ -623,36 +666,77 @@ cv.addEventListener('click', e=>{
   }
   const r=cv.getBoundingClientRect();
   const gx=e.clientX-r.left, gy=e.clientY-r.top;
-  const cx=(gx-PAD)/CELL, cy=(gy-PAD)/CELL;
-
+  const intent = resolveIntent(p, (gx-PAD)/CELL, (gy-PAD)/CELL);
+  if (!intent) return;
+  if (isOnline()){
+    if (hostSim()) hostApplyAction(p, intent);          // 房主：本地校验后直接执行
+    else {                                              // 客户端：发 intent，等房主快照
+      busy = true; setTimeout(()=>{ busy=false; }, 2500);
+      netSend({t:'act', a:intent});
+    }
+  }else{
+    applyIntent(p, intent);
+  }
+});
+// 把一次点击解析成操作意图（带本地提示），真正的执行统一走 applyIntent
+function resolveIntent(p, cx, cy){
   // ① 扛着锤子 → 点击墙砸碎
   if (p.item==='hammer'){
     const sm = wallAt(cx, cy);
-    if (sm){ doSmash(p, sm[0], sm[1], sm[2]); return; }
+    if (sm) return {type:'smash', kind:sm[0], x:sm[1], y:sm[2]};
   }
   // ② 靠近格线 → 放墙
   const w = snapWall(cx, cy);
   if (w){
     const [k,x,y]=w;
-    if (p.walls<=0){ toast('你的墙用完了！'); sBad(); return; }
+    if (p.walls<=0){ toast('你的墙用完了！'); sBad(); return null; }
     if (!wallOK(k,x,y)){
       toast(wallClash(k,x,y) ? '这里放不了墙' : '不能把人彻底堵死！');
-      sBad(); return;
+      sBad(); return null;
     }
-    doWall(p,k,x,y);
-    return;
+    return {type:'wall', kind:k, x, y};
   }
-  // ② 点格子 → 移动
+  // ③ 点格子 → 移动
   const tx=Math.round(cx-0.5), ty=Math.round(cy-0.5);
   if (inB(tx,ty)){
     const ms = legalMoves(p);
     const hit = ms.find(c=>c.x===tx&&c.y===ty);
-    if (hit){ doMove(p,hit); return; }
-    if (tx===p.cell.x&&ty===p.cell.y){ toast('点相邻格移动，或点格线缝隙放墙'); return; }
+    if (hit) return {type:'move', x:tx, y:ty};
+    if (tx===p.cell.x&&ty===p.cell.y){ toast('点相邻格移动，或点格线缝隙放墙'); return null; }
     toast(ms.length ? '走不到那里' : '你被困住了！');
     sBad();
   }
-});
+  return null;
+}
+function applyIntent(p, a){
+  if (a.type==='move') doMove(p, {x:a.x, y:a.y});
+  else if (a.type==='wall') doWall(p, a.kind, a.x, a.y);
+  else if (a.type==='smash') doSmash(p, a.kind, a.x, a.y);
+}
+// 房主权威：校验任何来源（含自己）的操作后执行，非法则回执提示
+function hostApplyAction(p, a){
+  const reject = text => { netEv({type:'reject', to:p.color, text}); netFlush(); };
+  if (p.ai || p.left) return;
+  if (!isSyncMode() && cur()!==p) return reject('还没轮到你');
+  if (isSyncMode()){
+    const now = performance.now();
+    if (now - p.lastAct < SYNC_CD) return reject('太快了！动作间隔 0.5 秒');
+    if (p.ap < 1) return reject('操作点不足');
+  }
+  if (a.type==='move'){
+    if (!legalMoves(p).some(c=>c.x===a.x&&c.y===a.y)) return reject('走不到那里');
+    applyIntent(p, a);
+  }else if (a.type==='wall'){
+    if (p.walls<=0) return reject('你的墙用完了！');
+    if (!wallOK(a.kind,a.x,a.y)) return reject('这里放不了墙');
+    applyIntent(p, a);
+  }else if (a.type==='smash'){
+    if (p.item!=='hammer') return reject('你没有锤子');
+    const set = a.kind==='h'?wallsH:wallsV;
+    if (!set.has(K(a.x,a.y))) return reject('那堵墙已经没了');
+    applyIntent(p, a);
+  }
+}
 // 吸附最近的可放墙位置：光标靠近哪条格线，就沿哪条线放
 function snapWall(cx, cy){
   const dV = Math.abs(cx - Math.round(cx));   // 离竖直格线
@@ -715,9 +799,9 @@ function draw(now){
   const dt = Math.min(.05,(now-lastFrame)/1000); lastFrame = now;
   if (isSyncMode() && !winner){
     for(const p of players) p.ap = Math.min(SYNC_APMAX, p.ap + dt);   // 每秒回1点
-    syncAIDriver(now);
+    if (hostSim()) syncAIDriver(now);
   }
-  if (itemsOn && !winner){
+  if (itemsOn && !winner && hostSim()){
     itemClock += dt;
     if (itemClock >= itemInterval){ itemClock = 0; spawnItem(); }
   }
@@ -764,7 +848,11 @@ function draw(now){
   }
 
   // 当前人类玩家合法移动提示
-  const cp = winner?null:(isSyncMode() ? (players[0].human?players[0]:null) : cur());
+  let cp = null;
+  if (!winner){
+    if (isSyncMode()) cp = isOnline() ? players.find(q=>q.color===myColor) : (players[0].human?players[0]:null);
+    else cp = cur();
+  }
   if (cp && cp.human && !busy){
     ctx.fillStyle='rgba(255,255,255,.10)';
     for(const c of legalMoves(cp)){
@@ -956,8 +1044,10 @@ function buildPanel(){
     row.style.color=COLORS[p.color].main;
     row.innerHTML=`
       <span class="dot"></span>
-      <span class="pname" style="color:var(--text)">${COLORS[p.color].name}
-        ${p.human&&(mode==='pve'||mode==='sync')?'<span class="tagyou">你</span>':''}
+      <span class="pname" style="color:var(--text)">${p.name || COLORS[p.color].name}
+        ${isOnline()
+          ? (p.color===myColor?'<span class="tagyou">你</span>':'')
+          : (p.human&&(mode==='pve'||mode==='sync')?'<span class="tagyou">你</span>':'')}
         ${p.ai?'<span style="font-size:10px;color:var(--dim)">AI</span>':''}</span>
       <span class="itm"></span>
       <span class="wnum" title="剩余墙数">墙 ×${wallStock}</span>
@@ -981,7 +1071,7 @@ function renderPanel(){
   }
 }
 function syncSelects(){
-  document.getElementById('modeSel').value = mode;
+  if (!isOnline()) document.getElementById('modeSel').value = mode;
   document.getElementById('sizeSel').value = String(N);
   document.getElementById('wallSel').value = String(wallStock);
   document.getElementById('itemSel').value = String(itemsOn?itemInterval:0);
@@ -1003,6 +1093,347 @@ function refreshHint(){
       itemLine+
       '<b>获胜</b>：第一个踏上中央 👑 王座。<br>'+
       '墙不能穿过、不能重叠，也不许把任何人<b>彻底堵死</b>。';
+}
+
+/* ================= 在线对战（Cloudflare Workers + Durable Objects） ================= */
+const NET_WS_DEFAULT = 'wss://throne-race-online.breadbot86.workers.dev/api/room';
+                             // ↑ 已部署的在线对战服务器；绑定自定义域名后改成 wss://play.你的域名/api/room
+                             //   临时调试可用 URL 参数覆盖：?ws=ws://127.0.0.1:8787/api/room
+
+const meOnline = () => players.find(p=>p.color===myColor);
+function netWsBase(){ return Q.get('ws') || NET_WS_DEFAULT; }
+function netSend(obj){ try{ if (net.ws && net.ws.readyState===1) net.ws.send(JSON.stringify(obj)); }catch(e){} }
+
+/* ---- 房主：快照广播（动作函数里的 netEv 只记事件，微任务里合并成一次快照发出） ---- */
+function netEv(e){
+  if (!hostSim()) return;
+  netPending.push(e);
+  if (!netFlushQueued){ netFlushQueued = true; queueMicrotask(netFlush); }
+}
+function netFlush(){
+  netFlushQueued = false;
+  if (!netPending.length) return;
+  const ev = netPending; netPending = [];
+  netSend({ t:'state', s: serializeState(), ev });
+}
+function serializeState(){
+  return {
+    sync: isSyncMode(), N,
+    wallsH: [...wallsH], wallsV: [...wallsV], wallOwner,
+    turnIdx, turnCount, passStreak,
+    winner: winner==null ? null : (winner==='draw' ? 'draw' : winner.color),
+    items: items.map(it=>({x:it.x, y:it.y, kind:it.kind})),
+    players: players.map(p=>({
+      color:p.color, name:p.name, cell:{x:p.cell.x, y:p.cell.y},
+      walls:p.walls, left:p.left, ai:p.ai, human:p.human, item:p.item,
+      ap:Math.round(p.ap*100)/100,
+    })),
+    now: performance.now(),
+  };
+}
+function applySnapshot(s, ev){
+  mode = s.sync ? 'onsync' : 'online';
+  busy = false;
+  const prevCells = {};
+  for (const p of players) prevCells[p.color] = { ...p.cell };
+  if (s.N !== N) setBoardSize(s.N);
+  wallsH = new Set(s.wallsH);
+  wallsV = new Set(s.wallsV);
+  wallOwner = { ...s.wallOwner };
+  turnIdx = s.turnIdx; turnCount = s.turnCount; passStreak = s.passStreak;
+  items = (s.items||[]).map(it=>({x:it.x, y:it.y, kind:it.kind}));
+  itemClock = 0;
+  const hostNow = s.now || 0;
+  players = s.players.map(sp=>{
+    const np = {
+      color:sp.color, name:sp.name, cell:{x:sp.cell.x, y:sp.cell.y},
+      walls:sp.walls, left:sp.left, ai:sp.ai, human:sp.human, item:sp.item||null,
+      ap: sp.ap!=null ? sp.ap : SYNC_APMAX,
+      lastAct: performance.now() - Math.max(0, hostNow - (sp.lastAct || hostNow)),  // 换算到本地时钟
+      tween:null, bank:false, burstLeft:0, nextThink:0,
+    };
+    const oc = prevCells[sp.color];                       // 远端棋子也走 90ms 滑动动画
+    if (oc && (oc.x!==np.cell.x || oc.y!==np.cell.y))
+      np.tween = { fx:oc.x, fy:oc.y, t0:performance.now() };
+    return np;
+  });
+  winner = s.winner==null ? null : (s.winner==='draw' ? 'draw' : (players.find(p=>p.color===s.winner)||null));
+  layout();
+  buildPanel(); renderPanel(); refreshHint(); syncSelects();
+  document.getElementById('overlay').classList.remove('show');
+  for (const e of ev||[]) applyEvent(e);
+}
+function applyEvent(e){
+  if (e.to && e.to !== myColor) return;                   // 定向消息只给收件人
+  const now = performance.now();
+  switch(e.type){
+    case 'roundstart': toast('新对局开始！'); break;
+    case 'move': (e.jump?sJump:sMove)(); break;
+    case 'wall': sWall(); fx.push({type:'wallpop', kind:e.kind, x:e.x, y:e.y, t0:now}); break;
+    case 'smash': sSmash(); fx.push({type:'smash', kind:e.kind, x:e.x, y:e.y, t0:now}); break;
+    case 'pickup':
+      sPick();
+      if (e.kind==='hammer') toast(COLORS[e.color].name+' 拾取 🔨：点击任意墙将其击碎');
+      break;
+    case 'itemspawn': sPick(); fx.push({type:'itempop', x:e.x, y:e.y, t0:now}); break;
+    case 'pass': toast(COLORS[e.color].name+' 无路可走，跳过'); break;
+    case 'reject': toast(e.text); sBad(); break;
+    case 'aidesk': toast((players.find(q=>q.color===e.color)||{}).name+' 掉线，AI 接管'); break;
+    case 'win': sWin(); spawnConfetti(); showOnlineEnd(e.color); break;
+    case 'draw': showOnlineEnd('draw'); break;
+  }
+}
+function showOnlineEnd(w){
+  const ov=document.getElementById('overlay'), pn=document.getElementById('ovPanel');
+  const head = w==='draw'
+    ? '<h2>🤝 谁也到不了王座</h2><div class="sub">互相筑墙的代价 —— 平局（0个朋友实锤）</div>'
+    : (()=>{
+        const p = players.find(q=>q.color===w), c = COLORS[w].main;
+        return `<h2 style="color:${c}; text-shadow:0 0 24px ${c}66">👑 ${(p&&p.name)||COLORS[w].name} 获胜！</h2>
+          <div class="sub">4位玩家 · 1位赢家 · 0个朋友 —— 共 ${turnCount} 手</div>`;
+      })();
+  pn.innerHTML = `${head}
+    <div class="legend">
+      ${players.map(q=>`<span style="color:${COLORS[q.color].main}"><i></i>${q.name||COLORS[q.color].name}${q.color===w?' 👑':''}</span>`).join('')}
+    </div>
+    <div class="btnrow">
+      ${hostSim() ? '<button class="primary" id="btnAgain">再来一局</button>' : '<button disabled>等待房主开新局…</button>'}
+      <button id="btnNetExit">离开房间</button>
+    </div>`;
+  ov.classList.add('show');
+  document.getElementById('btnAgain').onclick = ()=>netStartRound();
+  document.getElementById('btnNetExit').onclick = ()=>netLeave();
+}
+
+/* ---- 房主：开局 / 校验客户端操作 ---- */
+function newOnlineGame(seats, settings){
+  clearTimeout(aiTimer);
+  mode = settings.sync ? 'onsync' : 'online';
+  setBoardSize(settings.size);
+  wallStock = settings.walls;
+  itemsOn = settings.items>0; itemInterval = settings.items||5;
+  wallsH.clear(); wallsV.clear(); wallOwner = {};
+  players = ['blue','green','red','orange'].map(c=>{
+    const meta = (seats||[]).find(s=>s.seat===c);
+    const occupied = !!meta;
+    return {
+      color:c, name: occupied ? meta.name : ('AI·'+COLORS[c].name),
+      cell:{...SPAWN[c]}, walls:wallStock, left:false,
+      ai: !occupied, human: occupied,
+      tween:null, ap:SYNC_APMAX, lastAct:performance.now(), nextThink:0, bank:false, burstLeft:0, item:null,
+    };
+  });
+  turnIdx = Math.floor(rnd()*4);
+  winner = null; busy = false; turnCount = 0; passStreak = 0;
+  items = []; itemClock = 0;
+  confetti = []; fx = []; toastMsg = null;
+  document.getElementById('overlay').classList.remove('show');
+  layout(); syncSelects(); buildPanel(); renderPanel(); refreshHint();
+  if (!isSyncMode()){ autoPassIfNeeded(); scheduleAI(); }   // 先手可能是 AI
+  netEv({type:'roundstart'});       // 触发首份快照广播
+}
+function netStartRound(){
+  const sel = document.getElementById('netSyncSel');
+  const sync = sel ? sel.value==='1' : isSyncMode();
+  netSend({ t:'start', settings:{ sync, size:N, walls:wallStock, items: itemsOn?itemInterval:0 } });
+}
+
+/* ---- 连接与房间 UI ---- */
+function showNetConnect(prefill){
+  const ov=document.getElementById('overlay'), pn=document.getElementById('ovPanel');
+  pn.innerHTML = `
+    <h2>🌐 在线对战</h2>
+    <div class="sub">和不同设备的朋友对局 · 2~4 人，空位由 AI 补齐</div>
+    <div style="text-align:left">
+      <div class="ndim" style="margin:2px 0 4px">你的昵称</div>
+      <input id="netNick" maxlength="12" placeholder="起个名字">
+      <div class="ndim" style="margin:14px 0 6px">开一个新房间，或输入 4 位房间码加入</div>
+      <div class="btnrow"><button class="primary" id="btnDoCreate">🎬 创建房间</button></div>
+      <div class="btnrow" style="margin-top:8px">
+        <input id="netCode" maxlength="4" placeholder="房间码" value="${prefill||''}"
+               style="text-transform:uppercase; letter-spacing:4px; text-align:center">
+        <button id="btnDoJoin" style="flex:0 0 84px">加入</button>
+      </div>
+    </div>
+    <div id="netConnStatus" style="min-height:18px; margin-top:10px; font-size:12px; color:#ff8f8f"></div>
+    <button id="btnNetCancel">先不联机</button>`;
+  document.getElementById('netNick').value = showNetConnect.nick || ('玩家'+(1+Math.floor(Math.random()*999)));
+  ov.classList.add('show');
+  document.getElementById('btnDoCreate').onclick = ()=>netBegin('create');
+  document.getElementById('btnDoJoin').onclick = ()=>{
+    const c = document.getElementById('netCode').value.trim().toUpperCase();
+    if (!/^[A-Z0-9]{4}$/.test(c)){ document.getElementById('netConnStatus').textContent='房间码是 4 位字母数字'; return; }
+    netBegin('join', c);
+  };
+  document.getElementById('netCode').addEventListener('keydown', e=>{
+    if (e.key==='Enter') document.getElementById('btnDoJoin').click();
+  });
+  document.getElementById('btnNetCancel').onclick = ()=>{
+    ov.classList.remove('show');
+    showNetConnect.nick = document.getElementById('netNick').value;
+    if (net.phase==='connecting'){ try{ net.ws.close(); }catch(e){} net.ws=null; net.phase='idle'; }
+    if (net.phase==='idle' && isOnline()){ mode='pve'; myColor=null; newGame(); }
+    syncSelects(); lockNetSettings();
+  };
+}
+function netBegin(kind, code){
+  const base = netWsBase();
+  const st = document.getElementById('netConnStatus');
+  if (!base){
+    st.textContent = '还没配置服务器：部署 server/ 后把地址填入 index.html 的 NET_WS_DEFAULT，或临时用 ?ws=wss://… 参数';
+    return;
+  }
+  showNetConnect.nick = document.getElementById('netNick').value;
+  st.textContent = '连接中…';
+  net.lastErr = null;
+  net.phase = 'connecting';
+  net.pendingCode = code;
+  try{
+    net.ws = new WebSocket(base + '?' + (kind==='create' ? 'create=1' : 'code='+encodeURIComponent(code)));
+  }catch(err){
+    net.phase='idle'; st.textContent = '无法连接：'+err.message; return;
+  }
+  net.ws.onopen = ()=>{ netSend({ t:'hello', name: showNetConnect.nick }); };
+  net.ws.onmessage = ev=>{ let m; try{ m = JSON.parse(ev.data); }catch{ return; } netOnMsg(m); };
+  net.ws.onerror = ()=>{};
+  net.ws.onclose = ()=>{
+    if (net.phase==='connecting'){
+      st.textContent = net.lastErr ? ('连接失败：'+net.lastErr) : '连接失败：服务器不可达';
+      net.phase='idle'; net.ws=null; return;
+    }
+    netTeardown(net.leaving ? '已离开房间' : '与服务器的连接已断开');
+  };
+}
+function netOnMsg(m){
+  switch(m.t){
+    case 'welcome':
+      net.phase='lobby'; net.code=m.code; net.seat=m.seat; net.isHost=!!m.isHost;
+      myColor=m.seat; net.roster=m.players||[];
+      document.getElementById('overlay').classList.remove('show');
+      renderNetCard(); lockNetSettings();
+      return;
+    case 'roster':
+      net.roster=m.players||[]; renderNetCard();
+      return;
+    case 'start':
+      net.phase='playing';
+      if (net.isHost) newOnlineGame(m.seats, m.settings);
+      else toast('对局开始！');
+      renderNetCard(); lockNetSettings();
+      return;
+    case 'act':
+      if (net.isHost){
+        const p = players.find(q=>q.color===m.from);
+        if (p) hostApplyAction(p, m.a);
+      }
+      return;
+    case 'state':
+      if (!net.isHost) applySnapshot(m.s, m.ev||[]);
+      return;
+    case 'left': {
+      net.roster = m.players || net.roster;
+      if (net.isHost && net.phase==='playing'){
+        const p = players.find(q=>q.color===m.seat);      // 掉线者的座位交给 AI
+        if (p && !p.ai){
+          p.ai=true; p.human=false; p.lastAct=performance.now()-SYNC_CD;
+          buildPanel(); renderPanel();
+          netEv({type:'aidesk', color:m.seat});
+          if (!isSyncMode() && !winner && cur()===p) scheduleAI();
+        }
+      }else{
+        renderNetCard();
+        toast((m.name||'有玩家')+' 离开了');
+      }
+      return;
+    }
+    case 'host-left': netTeardown('房主离开，房间已解散'); return;
+    case 'err':
+      net.lastErr = m.msg || '未知错误';
+      if (net.phase==='connecting'){
+        const st = document.getElementById('netConnStatus');
+        if (st) st.textContent = '失败：'+net.lastErr;
+      }else toast(net.lastErr);
+      return;
+  }
+}
+function netTeardown(msg){
+  try{ if (net.ws){ net.ws.onclose=null; net.ws.close(); } }catch(e){}
+  net.ws=null; net.phase='idle'; net.code=null; net.seat=null;
+  net.isHost=false; net.roster=[]; net.leaving=false;
+  myColor=null;
+  if (msg) toast(msg);
+  if (isOnline()){ mode='pve'; newGame(); }
+  renderNetCard(); lockNetSettings(); syncSelects();
+}
+function netLeave(){
+  net.leaving = true;
+  const had = net.ws && net.ws.readyState<=1;
+  try{ if (net.ws) net.ws.close(); }catch(e){}
+  if (!had) netTeardown('已离开房间');
+}
+function lockNetSettings(){
+  const hostLobby = isOnline() && net.isHost && net.phase==='lobby';
+  for (const id of ['sizeSel','wallSel','itemSel'])
+    document.getElementById(id).disabled = isOnline() ? !hostLobby : false;
+  document.getElementById('modeSel').disabled = isOnline();
+}
+function renderNetCard(){
+  const el = document.getElementById('netCard');
+  if (!isOnline() || net.phase==='idle' || net.phase==='connecting'){ el.style.display='none'; return; }
+  el.style.display='';
+  const rows = ['blue','green','red','orange'].map(c=>{
+    const idx = net.roster.findIndex(r=>r.seat===c);
+    if (idx<0) return `<div class="nrow" style="color:#5a6a8c"><span class="dot" style="color:${COLORS[c].main}"></span><span class="ndim">空位 · 开局后 AI 补位</span></div>`;
+    const meta = net.roster[idx];
+    return `<div class="nrow" style="color:${COLORS[c].main}">
+      <span class="dot"></span>
+      <span class="pname" style="color:var(--text)">${escapeHtml(meta.name||COLORS[c].name)}
+        ${meta.seat===net.seat?'<span class="tagyou">你</span>':''}
+        ${idx===0?'<span class="ndim">房主</span>':''}</span></div>`;
+  }).join('');
+  const mid = net.phase==='playing'
+    ? `<div class="ndim" style="text-align:center; margin:4px 0 8px">对局进行中${net.isHost?' · 顶部「开新一局」可开新回合':''}</div>
+       <div class="btnrow"><button id="btnNetLeave">离开房间</button></div>`
+    : (net.isHost
+      ? `<select id="netSyncSel">
+           <option value="">经典 · 轮流行动</option>
+           <option value="1">同步 · 实时乱斗</option>
+         </select>
+         <div class="ndim" style="margin:6px 0 2px">地图 / 墙数 / 道具用左侧设置，开局后锁定</div>
+         <div class="btnrow" style="margin-top:6px">
+           <button class="primary" id="btnNetStart">开始对局</button>
+           <button id="btnNetLeave">离开</button>
+         </div>`
+      : `<div class="ndim" style="text-align:center; margin:4px 0 8px">等待房主开始…</div>
+         <div class="btnrow"><button id="btnNetLeave">离开房间</button></div>`);
+  el.innerHTML = `
+    <h3>在线房间</h3>
+    <div class="netcode">${escapeHtml(net.code||'')}</div>
+    <div class="btnrow">
+      <button id="btnCopyCode">复制房码</button>
+      <button id="btnCopyLink">邀请链接</button>
+    </div>
+    <div style="height:8px"></div>${rows}<div style="height:8px"></div>${mid}`;
+  document.getElementById('btnCopyCode').onclick = ()=>copyText(net.code);
+  document.getElementById('btnCopyLink').onclick = ()=>copyText(location.origin+location.pathname+'?join='+net.code);
+  document.getElementById('btnNetLeave').onclick = ()=>netLeave();
+  const bs = document.getElementById('btnNetStart'); if (bs) bs.onclick = ()=>netStartRound();
+}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function copyText(t){
+  const ok = ()=>toast('已复制');
+  const fallback = ()=>{
+    try{
+      const i=document.createElement('textarea');
+      i.value=t; document.body.appendChild(i); i.select();
+      document.execCommand('copy'); document.body.removeChild(i); ok();
+    }catch(e){ toast('复制失败：'+t); }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText)
+    navigator.clipboard.writeText(t).then(ok, fallback);
+  else fallback();
 }
 
 /* ================= 按钮 ================= */
@@ -1028,7 +1459,15 @@ function showRules(first){
   ov.classList.add('show');
   document.getElementById('btnOk').onclick=()=>{ ov.classList.remove('show'); ac(); };
 }
-document.getElementById('btnNew').onclick = ()=>{ ac(); newGame(); };
+document.getElementById('btnNew').onclick = ()=>{
+  ac();
+  if (isOnline()){
+    if (hostSim()) netStartRound();          // 房主：直接用当前设置开新回合
+    else toast('等待房主开新局');
+    return;
+  }
+  newGame();
+};
 document.getElementById('btnRules').onclick = ()=>showRules(false);
 document.getElementById('btnMute').onclick = function(){
   muted=!muted; this.textContent = muted? '🔇 静音':'🔊 音效';
@@ -1036,20 +1475,33 @@ document.getElementById('btnMute').onclick = function(){
 document.getElementById('btnSpeed').onclick = function(){
   fastAI=!fastAI; this.textContent = fastAI? '⚡ 极速':'⚡ 正常';
 };
-document.getElementById('modeSel').onchange = function(){ mode=this.value; newGame(); };
-document.getElementById('sizeSel').onchange = function(){ setBoardSize(+this.value); newGame(); };
-document.getElementById('wallSel').onchange = function(){ wallStock=+this.value; newGame(); };
+document.getElementById('modeSel').onchange = function(){
+  if (this.value==='online'){ mode='online'; myColor=null; showNetConnect(); return; }
+  if (isOnline()){ this.value='online'; return; }   // 在线中不允许切回本地模式，先离开房间
+  mode=this.value; newGame();
+};
+document.getElementById('sizeSel').onchange = function(){
+  if (isOnline()){ if(!hostSim()) this.value=String(N); return; }   // 在线时仅房主在大厅可调
+  setBoardSize(+this.value); newGame();
+};
+document.getElementById('wallSel').onchange = function(){
+  if (isOnline()){ if(!hostSim()) this.value=String(wallStock); return; }
+  wallStock=+this.value; newGame();
+};
 document.getElementById('itemSel').onchange = function(){
   const v=+this.value; itemsOn = v>0; itemInterval = v||5;
   items = []; itemClock = 0; refreshHint();
+  if (isOnline() && !hostSim()){ this.value = String(itemsOn?itemInterval:0); }
 };
 
 /* ================= 启动 ================= */
 layout();
 newGame();
 requestAnimationFrame(draw);
-// 首次进入展示规则（带 seed 的自动化测试跳过）
-if (!Q.get('seed')) showRules(true);
+// 首次进入展示规则（带 seed 的自动化测试跳过；带 join 邀请码时也直接进连接框）
+if (!Q.get('seed') && !Q.get('join')) showRules(true);
+if (Q.get('join')) showNetConnect(Q.get('join').toUpperCase());
+else if (Q.get('mode')==='online') showNetConnect();
 </script>
 </body>
 </html>

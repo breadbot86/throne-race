@@ -1,0 +1,11 @@
+name = "throne-race-online"
+main = "src/worker.js"
+compatibility_date = "2025-08-01"
+
+# 免费版 Workers 只能用 SQLite 存储的 Durable Object，必须带这条迁移
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
+[durable_objects]
+bindings = [{ name = "ROOM", class_name = "Room" }]
